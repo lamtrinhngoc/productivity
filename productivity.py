@@ -28,6 +28,9 @@ def main():
         link_spreadsheet_url = file.read().strip()
     with open('master', 'r') as file:
         master_spreadsheet_url = file.read().strip()
+
+    logging.info(f"Link Spreadsheet URL: {link_spreadsheet_url}")
+    logging.info(f"Master Spreadsheet URL: {master_spreadsheet_url}")
         
     # Mở spreadsheet chứa danh sách các link
     link_spreadsheet = open_spreadsheet_by_url(link_spreadsheet_url)

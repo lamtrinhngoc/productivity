@@ -13,6 +13,11 @@ logging.basicConfig(level=logging.INFO)
 def main():
     link = os.getenv('LINK_SPREADSHEET')
     master = os.getenv('MASTER_SPREADSHEET')
+    # Kiểm tra xem các biến môi trường có được đọc đúng cách không
+    if not link_spreadsheet:
+        raise ValueError("Biến môi trường 'LINK_SPREADSHEET' không được đặt hoặc không có giá trị.")
+    if not master_spreadsheet:
+        raise ValueError("Biến môi trường 'MASTER_SPREADSHEET' không được đặt hoặc không có giá trị.")
     
     # Xác thực và tạo client cho gspread
     

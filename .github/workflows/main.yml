@@ -31,8 +31,8 @@ jobs:
         
     - name: Set environment variables
       env:
-        LINK: ${{ secrets.LINK }}
-        MASTER: ${{ secrets.MASTER }}
+        LINK: ${{ variables.LINK }}
+        MASTER: ${{ variables.MASTER }}
       run: echo "Environment variables set"
 
     - name: Run aggregate script

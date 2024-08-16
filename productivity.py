@@ -11,14 +11,6 @@ import time
 logging.basicConfig(level=logging.INFO)
 
 def main():
-    link = os.getenv('LINK')
-    master = os.getenv('MASTER')
-    # Kiểm tra xem các biến môi trường có được đọc đúng cách không
-    if not link:
-        raise ValueError("Biến môi trường 'LINK_SPREADSHEET' không được đặt hoặc không có giá trị.")
-    if not master:
-        raise ValueError("Biến môi trường 'MASTER_SPREADSHEET' không được đặt hoặc không có giá trị.")
-    
     # Xác thực và tạo client cho gspread
     
     scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]

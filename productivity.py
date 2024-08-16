@@ -76,7 +76,7 @@ def main():
                 # Delay sau mỗi 20 lần gọi API
                 if api_call_count % 15 == 0:
                     logging.info("Đã gọi API 20 lần, chờ 1 phút trước khi tiếp tục...")
-                    time.sleep(90)  # Chờ 1 phút
+                    time.sleep(70)  # Chờ 1 phút
 
     # Ghi dữ liệu tổng hợp vào sheet tổng
     master_sheet.clear()  # Xóa dữ liệu cũ

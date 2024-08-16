@@ -11,8 +11,8 @@ import time
 logging.basicConfig(level=logging.INFO)
 
 def main():
-    link_spreadsheet = os.getenv('LINK_SPREADSHEET')
-    master_spreadsheet = os.getenv('MASTER_SPREADSHEET')
+    link = os.getenv('LINK_SPREADSHEET')
+    master = os.getenv('MASTER_SPREADSHEET')
     
     # Xác thực và tạo client cho gspread
     
@@ -28,7 +28,7 @@ def main():
             return None
 
     # Mở spreadsheet chứa danh sách các link
-    link_spreadsheet_url = link_spreadsheet
+    link_spreadsheet_url = link
     link_spreadsheet = open_spreadsheet_by_url(link_spreadsheet_url)
     if link_spreadsheet is None:
         raise Exception("Không thể mở bảng chứa danh sách các link. Kiểm tra quyền truy cập và URL.")
@@ -42,7 +42,7 @@ def main():
     sheet_names = df_links[['Sheet 1', 'Sheet 2', 'Sheet 3','Sheet 4','Sheet 5']].values.tolist()
 
     # Mở spreadsheet tổng
-    master_spreadsheet_url = master_spreadsheet
+    master_spreadsheet_url = master
     master_spreadsheet = open_spreadsheet_by_url(master_spreadsheet_url)
     if master_spreadsheet is None:
         raise Exception("Không thể mở bảng tổng. Kiểm tra quyền truy cập và URL.")

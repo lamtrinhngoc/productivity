@@ -19,11 +19,11 @@ def main():
         try:
             return client.open_by_url(url)
         except gspread.exceptions.APIError as e:
-            logging.error(f"Không thể mở bảng với URL {url}. Lỗi: {e}")
+            logging.error(f"Không thể mở bảng. Lỗi: {e}")
             return None
 
     # Mở spreadsheet chứa danh sách các link
-    link_spreadsheet_url = "https://docs.google.com/spreadsheets/d/10eMZVnmtyyr5JAzDvpE5Brgh-8fw3lEKmGvL5m6eCUY/edit?gid=0#gid=0"
+    link_spreadsheet_url = link_spreadsheet
     link_spreadsheet = open_spreadsheet_by_url(link_spreadsheet_url)
     if link_spreadsheet is None:
         raise Exception("Không thể mở bảng chứa danh sách các link. Kiểm tra quyền truy cập và URL.")
@@ -37,7 +37,7 @@ def main():
     sheet_names = df_links[['Sheet 1', 'Sheet 2', 'Sheet 3','Sheet 4','Sheet 5']].values.tolist()
 
     # Mở spreadsheet tổng
-    master_spreadsheet_url = "https://docs.google.com/spreadsheets/d/1VlXicEr1FGrpdDcRpuv1aE2TAG-7QHEfWKNtFJF4nc8/edit?gid=0#gid=0"
+    master_spreadsheet_url = master_spreadsheet
     master_spreadsheet = open_spreadsheet_by_url(master_spreadsheet_url)
     if master_spreadsheet is None:
         raise Exception("Không thể mở bảng tổng. Kiểm tra quyền truy cập và URL.")
@@ -58,7 +58,7 @@ def main():
             df.dropna(subset=df.columns[1:5], how='all', inplace=True)
             return df
         except gspread.exceptions.WorksheetNotFound:
-            logging.error(f"Không tìm thấy sheet với tên {sheet_name} trong bảng {url}")
+            logging.error(f"Không tìm thấy sheet với tên {sheet_name}")
             return pd.DataFrame()
 
     # Tổng hợp dữ liệu từ tất cả các sheet
@@ -68,7 +68,7 @@ def main():
     for url, names in zip(sheet_urls, sheet_names):
         for name in names:
             if name:  # Chỉ lấy dữ liệu nếu tên sheet không rỗng
-                logging.info(f"Đang xử lý sheet '{name}' trong bảng '{url}'")
+                logging.info(f"Đang xử lý sheet '{name}'")
                 sheet_data = get_sheet_data(url, name)
                 all_data = pd.concat([all_data, sheet_data], ignore_index=True)
                 api_call_count += 1

@@ -5,6 +5,9 @@ import pandas as pd
 import logging
 import time
 
+link_spreadsheet = os.getenv('LINK_SPREADSHEET')
+master_spreadsheet = os.getenv('MASTER_SPREADSHEET')
+
 # Cấu hình logging
 logging.basicConfig(level=logging.INFO)
 

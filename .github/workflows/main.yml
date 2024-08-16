@@ -33,7 +33,7 @@ jobs:
       env:
         LINK: ${{ secrets.LINK }}
         MASTER: ${{ secrets.MASTER }}
-      run:
+      run: |
         echo "$LINK" > link
         echo "$MASTER" > master
 

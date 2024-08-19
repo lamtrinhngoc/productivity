@@ -60,10 +60,7 @@ def main():
             df = pd.DataFrame(data)  # Chuyển dữ liệu thành DataFrame
             
             # Chỉ loại bỏ các dòng mà tất cả các ô từ cột B đến cột E trống
-            df.dropna(subset=df.columns[1:5], how='all', inplace=True)
-            for col in [0, 1, 22, 25, 30, 32, 33]:
-                df[col] = pd.to_datetime(df[col], errors='coerce').dt.strftime('%Y-%m-%d')
-                
+            df.dropna(subset=df.columns[1:5], how='all', inplace=True)  
             return df
         except gspread.exceptions.WorksheetNotFound:
             logging.error(f"Không tìm thấy sheet với tên {sheet_name}")
@@ -87,6 +84,8 @@ def main():
                     time.sleep(70)  # Chờ 1 phút
 
     # Ghi dữ liệu tổng hợp vào sheet tổng
+    for col in [0, 1, 22, 25, 30, 32, 33]:
+        all_data[col] = all_data.to_datetime(all_data[col], errors='coerce').dt.strftime('%Y-%m-%d')
     master_sheet.clear()  # Xóa dữ liệu cũ
     master_sheet.update([all_data.columns.values.tolist()] + all_data.values.tolist())
     master_sheet.update_cell(1, 42, '=ARRAYFORMULA(ifna(XLOOKUP(D1:D,Source!$A:$A,Source!$C:$C)))')

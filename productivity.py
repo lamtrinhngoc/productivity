@@ -86,7 +86,7 @@ def main():
 
     # Ghi dữ liệu tổng hợp vào sheet tổng
     for col in [0, 1, 22, 25, 30, 32, 33]:
-        all_data[col] = all_data.to_datetime(all_data[col], errors='coerce').dt.strftime('%Y-%m-%d')
+        all_data[col] = pd.to_datetime(all_data[col], errors='coerce').dt.strftime('%Y-%m-%d')
     master_sheet.clear()  # Xóa dữ liệu cũ
     master_sheet.update([all_data.columns.values.tolist()] + all_data.values.tolist())
     master_sheet.update_cell(1, 42, '=ARRAYFORMULA(ifna(XLOOKUP(D1:D,Source!$A:$A,Source!$C:$C)))')

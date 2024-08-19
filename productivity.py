@@ -62,7 +62,8 @@ def main():
             # Chỉ loại bỏ các dòng mà tất cả các ô từ cột B đến cột E trống
             df.dropna(subset=df.columns[1:5], how='all', inplace=True)
             for col in [0, 1, 22, 25, 30, 32, 33]:
-            df[col] = pd.to_datetime(df[col], errors='coerce').dt.strftime('%Y-%m-%d')
+                df[col] = pd.to_datetime(df[col], errors='coerce').dt.strftime('%Y-%m-%d')
+                
             return df
         except gspread.exceptions.WorksheetNotFound:
             logging.error(f"Không tìm thấy sheet với tên {sheet_name}")

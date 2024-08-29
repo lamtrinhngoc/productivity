@@ -105,7 +105,7 @@ def main():
     all_data.fillna('', inplace=True)
     master_sheet.clear()  # Xóa dữ liệu cũ
     master_sheet.update([all_data.columns.values.tolist()] + all_data.values.tolist())
-    master_sheet.update_cell(2, 42, '=ARRAYFORMULA(ifna(XLOOKUP(D1:D,Source!$A:$A,Source!$C:$C)))')
+    master_sheet.update_cell(2, 42, '=ARRAYFORMULA(ifna(XLOOKUP(D2:D,Source!$A:$A,Source!$C:$C)))')
     master_sheet.update_cell(1, 42, 'channel_by_prod')
     
     logging.info("Dữ liệu đã được tổng hợp thành công vào Master Spreadsheet!")

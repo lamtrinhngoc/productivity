@@ -10,10 +10,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: checkout repo content
+    - name: Checkout repo content
       uses: actions/checkout@v4 # checkout the repository content to GitHub runner
 
-    - name: setup python
+    - name: Setup Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.9' # install the python version needed
@@ -30,13 +30,22 @@ jobs:
         echo "$GOOGLE_APPLICATION_CREDENTIALS" > credentials.json
         
     - name: Set environment variables
+      run: |
+        echo "LINK=${{ secrets.LINK }}" >> $GITHUB_ENV
+        echo "MASTER=${{ secrets.MASTER }}" >> $GITHUB_ENV
+
+    - name: Run productivity script
       env:
+        GOOGLE_APPLICATION_CREDENTIALS: credentials.json
         LINK: ${{ secrets.LINK }}
         MASTER: ${{ secrets.MASTER }}
       run: |
-        echo "$LINK" > link
-        echo "$MASTER" > master
-
-    - name: Run aggregate script
-      run: |
         python productivity.py
+
+    - name: Run Performance Management-Nationwide script
+      env:
+        GOOGLE_APPLICATION_CREDENTIALS: credentials.json
+        LINK: ${{ secrets.LINK }}
+        MASTER: ${{ secrets.MASTER }}
+      run: |
+        python "Performance Management-Nationwide.py"

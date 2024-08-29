@@ -49,33 +49,47 @@ def main():
         raise Exception("Không thể mở bảng tổng. Kiểm tra quyền truy cập và URL.")
 
     master_sheet = master_spreadsheet.worksheet("Productivity")
+    schema = [
+    "date_update", "date_cdd_applied", "fullname", "source", "dob", "phone", "area", 
+    "address", "registration_area", "previous_work", "id_code", "note", "email", "rehire", 
+    "current_salary", "expected_ob_date", "position", "station_name", "storage", 
+    "reason_for_storage", "notes_for_recruitment", "recruiter_call", "recruiter_call_date", 
+    "recruiter_call_feedback", "recruiter_call_result", "hm_interview_date", "hm_interview", 
+    "hm_interview_feedback", "hm_interview_result", "offering", "offering_date", "accept", 
+    "accept_date", "onboard_date", "onboard", "reason_reject_ob", "finish_process", 
+    "fullname_ob", "phone_ob", "id_code_ob", "pic"
+    ]
 
     # Hàm để đọc dữ liệu từ một sheet và trả về DataFrame
-    def get_sheet_data(url, sheet_name):
+    def get_sheet_data(url, sheet_name, schema):
         sheet = open_spreadsheet_by_url(url)
         if sheet is None:
-            return pd.DataFrame()
+            return pd.DataFrame(columns=schema)
         try:
             worksheet = sheet.worksheet(sheet_name)
             data = worksheet.get('B8:AP')
             df = pd.DataFrame(data)  # Chuyển dữ liệu thành DataFrame
             
             # Chỉ loại bỏ các dòng mà tất cả các ô từ cột B đến cột E trống
-            df.dropna(subset=df.columns[1:5], how='all', inplace=True)  
+            df.dropna(subset=df.columns[1:5], how='all', inplace=True)
+
+            # Đảm bảo rằng DataFrame có các cột theo schema
+            df.columns = schema[:len(df.columns)]
+            df = df.reindex(columns=schema)
             return df
         except gspread.exceptions.WorksheetNotFound:
             logging.error(f"Không tìm thấy sheet với tên {sheet_name}")
             return pd.DataFrame()
 
     # Tổng hợp dữ liệu từ tất cả các sheet
-    all_data = pd.DataFrame()
+    all_data = pd.DataFrame(columns=schema)
     api_call_count = 0
 
     for url, names in zip(sheet_urls, sheet_names):
         for name in names:
             if name:  # Chỉ lấy dữ liệu nếu tên sheet không rỗng
                 logging.info(f"Đang xử lý sheet '{name}'")
-                sheet_data = get_sheet_data(url, name)
+                sheet_data = get_sheet_data(url, name, schema)
                 all_data = pd.concat([all_data, sheet_data], ignore_index=True)
                 api_call_count += 1
                 
@@ -85,13 +99,14 @@ def main():
                     time.sleep(70)  # Chờ 1 phút
 
     # Ghi dữ liệu tổng hợp vào sheet tổng
-    for col in [0, 1, 22, 25, 30, 32, 33]:
+    for col in ["date_update", "date_cdd_applied", "recruiter_call_date", "hm_interview_date", "offering_date", "accept_date", "onboard_date"]:
         all_data[col] = pd.to_datetime(all_data[col], errors='coerce').dt.strftime('%Y-%m-%d')
     all_data.replace([float('inf'), float('-inf')], '', inplace=True)
     all_data.fillna('', inplace=True)
     master_sheet.clear()  # Xóa dữ liệu cũ
     master_sheet.update([all_data.columns.values.tolist()] + all_data.values.tolist())
-    master_sheet.update_cell(1, 42, '=ARRAYFORMULA(ifna(XLOOKUP(D1:D,Source!$A:$A,Source!$C:$C)))')
+    master_sheet.update_cell(2, 42, '=ARRAYFORMULA(ifna(XLOOKUP(D2:D,Source!$A:$A,Source!$C:$C)))')
+    master_sheet.update_cell(1, 42, 'channel_by_prod')
     
     logging.info("Dữ liệu đã được tổng hợp thành công vào Master Spreadsheet!")
 

@@ -79,9 +79,9 @@ def main():
                 all_data = pd.concat([all_data, sheet_data], ignore_index=True)
                 api_call_count += 1
                 
-                # Delay sau mỗi 20 lần gọi API
+                # Delay sau mỗi 15 lần gọi API
                 if api_call_count % 15 == 0:
-                    logging.info("Đã gọi API 20 lần, chờ 1 phút trước khi tiếp tục...")
+                    logging.info("Đã gọi API 15 lần, chờ 1 phút trước khi tiếp tục...")
                     time.sleep(70)  # Chờ 1 phút
 
     # Ghi dữ liệu tổng hợp vào sheet tổng

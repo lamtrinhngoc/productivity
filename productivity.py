@@ -99,7 +99,7 @@ def main():
                     time.sleep(70)  # Chờ 1 phút
 
     # Ghi dữ liệu tổng hợp vào sheet tổng
-    for col in [0, 1, 22, 25, 30, 32, 33]:
+    for col in ["date_update", "date_cdd_applied", "recruiter_call_date", "hm_interview_date", "offering_date", "accept_date", "onboard_date"]:
         all_data[col] = pd.to_datetime(all_data[col], errors='coerce').dt.strftime('%Y-%m-%d')
     all_data.replace([float('inf'), float('-inf')], '', inplace=True)
     all_data.fillna('', inplace=True)

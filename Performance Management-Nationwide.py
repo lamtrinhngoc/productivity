@@ -47,9 +47,10 @@ def main():
     )
 
     # [WFA] Performance Management | Nationwide
+    data = df_all_member_productivity[['station_name', 'fullname', 'phone', 'date_update', 'storage', 'recruiter_call', 'recruiter_call_date', 'hm_interview', 'hm_interview_date', 'offering', 'offering_date', 'accept_date', 'accept', 'onboard_date', 'onboard', 'channel_by_prod', 'pic', 'position', 'area', 'station_type']]
     nationwide_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1rBfFxs8fsidwV0RbspHiTSQHuE-AoNPDMFfOfTsFbyQ/edit?gid=1531624287#gid=1531624287')
-    nationwide = nationwide_spreadsheet.worksheet("Productivity")
+    nationwide = nationwide_spreadsheet.worksheet("Raw Tracker")
     nationwide.clear()  # Xóa dữ liệu cũ
-    nationwide.update([df_all_member_productivity.columns.values.tolist()] + df_all_member_productivity.values.tolist())
+    nationwide.update([data.columns.values.tolist()] + data.values.tolist())
 if __name__ == "__main__":
     main()

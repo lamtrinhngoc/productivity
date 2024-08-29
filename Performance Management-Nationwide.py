@@ -45,6 +45,8 @@ def main():
             )
         )
     )
+    for col in ["date_update", "date_cdd_applied", "recruiter_call_date", "hm_interview_date", "offering_date", "accept_date", "onboard_date"]:
+        df_all_member_productivity[col] = pd.to_datetime(df_all_member_productivity[col], errors='coerce').dt.strftime('%Y-%m-%d')
 
     # [WFA] Performance Management | Nationwide
     data = df_all_member_productivity[['station_name', 'fullname', 'phone', 'date_update', 'storage', 'recruiter_call', 'recruiter_call_date', 'hm_interview', 'hm_interview_date', 'offering', 'offering_date', 'accept_date', 'accept', 'onboard_date', 'onboard', 'channel_by_prod', 'pic', 'position', 'area', 'station_type']]

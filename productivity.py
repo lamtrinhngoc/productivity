@@ -68,7 +68,17 @@ def main():
             return pd.DataFrame()
 
     # Tổng hợp dữ liệu từ tất cả các sheet
-    all_data = pd.DataFrame()
+    schema = [
+    "date_update", "date_cdd_applied", "fullname", "source", "dob", "phone", "area", 
+    "address", "registration_area", "previous_work", "id_code", "note", "email", "rehire", 
+    "current_salary", "expected_ob_date", "position", "station_name", "storage", 
+    "reason_for_storage", "notes_for_recruitment", "recruiter_call", "recruiter_call_date", 
+    "recruiter_call_feedback", "recruiter_call_result", "hm_interview_date", "hm_interview", 
+    "hm_interview_feedback", "hm_interview_result", "offering", "offering_date", "accept", 
+    "accept_date", "onboard_date", "onboard", "reason_reject_ob", "finish_process", 
+    "fullname_ob", "phone_ob", "id_code_ob", "pic", "channel_by_prod"
+    ]
+    all_data = pd.DataFrame(columns=schema)
     api_call_count = 0
 
     for url, names in zip(sheet_urls, sheet_names):

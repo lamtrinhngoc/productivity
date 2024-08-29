@@ -49,25 +49,6 @@ def main():
         raise Exception("Không thể mở bảng tổng. Kiểm tra quyền truy cập và URL.")
 
     master_sheet = master_spreadsheet.worksheet("Productivity")
-
-    # Hàm để đọc dữ liệu từ một sheet và trả về DataFrame
-    def get_sheet_data(url, sheet_name):
-        sheet = open_spreadsheet_by_url(url)
-        if sheet is None:
-            return pd.DataFrame()
-        try:
-            worksheet = sheet.worksheet(sheet_name)
-            data = worksheet.get('B8:AP')
-            df = pd.DataFrame(data)  # Chuyển dữ liệu thành DataFrame
-            
-            # Chỉ loại bỏ các dòng mà tất cả các ô từ cột B đến cột E trống
-            df.dropna(subset=df.columns[1:5], how='all', inplace=True)  
-            return df
-        except gspread.exceptions.WorksheetNotFound:
-            logging.error(f"Không tìm thấy sheet với tên {sheet_name}")
-            return pd.DataFrame()
-
-    # Tổng hợp dữ liệu từ tất cả các sheet
     schema = [
     "date_update", "date_cdd_applied", "fullname", "source", "dob", "phone", "area", 
     "address", "registration_area", "previous_work", "id_code", "note", "email", "rehire", 
@@ -78,6 +59,29 @@ def main():
     "accept_date", "onboard_date", "onboard", "reason_reject_ob", "finish_process", 
     "fullname_ob", "phone_ob", "id_code_ob", "pic", "channel_by_prod"
     ]
+
+    # Hàm để đọc dữ liệu từ một sheet và trả về DataFrame
+    def get_sheet_data(url, sheet_name, schema):
+        sheet = open_spreadsheet_by_url(url)
+        if sheet is None:
+            return pd.DataFrame(columns=schema)
+        try:
+            worksheet = sheet.worksheet(sheet_name)
+            data = worksheet.get('B8:AP')
+            df = pd.DataFrame(data)  # Chuyển dữ liệu thành DataFrame
+            
+            # Chỉ loại bỏ các dòng mà tất cả các ô từ cột B đến cột E trống
+            df.dropna(subset=df.columns[1:5], how='all', inplace=True)
+
+            # Đảm bảo rằng DataFrame có các cột theo schema
+            df.columns = schema[:len(df.columns)]
+            df = df.reindex(columns=schema)
+            return df
+        except gspread.exceptions.WorksheetNotFound:
+            logging.error(f"Không tìm thấy sheet với tên {sheet_name}")
+            return pd.DataFrame()
+
+    # Tổng hợp dữ liệu từ tất cả các sheet
     all_data = pd.DataFrame(columns=schema)
     api_call_count = 0
 
@@ -85,7 +89,7 @@ def main():
         for name in names:
             if name:  # Chỉ lấy dữ liệu nếu tên sheet không rỗng
                 logging.info(f"Đang xử lý sheet '{name}'")
-                sheet_data = get_sheet_data(url, name)
+                sheet_data = get_sheet_data(url, name, schema)
                 all_data = pd.concat([all_data, sheet_data], ignore_index=True)
                 api_call_count += 1
                 

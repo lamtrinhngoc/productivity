@@ -45,14 +45,27 @@ def main():
             )
         )
     )
-    for col in ["date_update", "date_cdd_applied", "recruiter_call_date", "hm_interview_date", "offering_date", "accept_date", "onboard_date"]:
-        df_all_member_productivity[col] = pd.to_datetime(df_all_member_productivity[col], errors='coerce').dt.strftime('%Y-%m-%d')
-
+    date_columns = ['date_update', 'recruiter_call_date', 'hm_interview_date', 'offering_date', 'accept_date', 'onboard_date']
+    for col in date_columns:
+        df_all_member_productivity[col] = pd.to_datetime(df_all_member_productivity[col], errors='coerce')
+    two_months_ago = pd.Timestamp.today().replace(day=1) - pd.DateOffset(months=2)
+    filter_datetime = df_all_member_productivity[
+    (df_all_member_productivity['date_update'] >= two_months_ago) |
+    (df_all_member_productivity['recruiter_call_date'] >= two_months_ago) |
+    (df_all_member_productivity['hm_interview_date'] >= two_months_ago) |
+    (df_all_member_productivity['offering_date'] >= two_months_ago) |
+    (df_all_member_productivity['accept_date'] >= two_months_ago) |
+    (df_all_member_productivity['onboard_date'] >= two_months_ago)
+    ]
+    for col in date_columns:
+        filter_datetime[col] = filter_datetime[col].dt.strftime('%Y-%m-%d')
+    filter_datetime = filter_datetime.replace({np.nan: '', np.inf: '', -np.inf: ''})
     # [WFA] Performance Management | Nationwide
-    data = df_all_member_productivity[['station_name', 'fullname', 'phone', 'date_update', 'storage', 'recruiter_call', 'recruiter_call_date', 'hm_interview', 'hm_interview_date', 'offering', 'offering_date', 'accept_date', 'accept', 'onboard_date', 'onboard', 'channel_by_prod', 'pic', 'position', 'area', 'station_type']]
+    
+    data_nationwide = filter_datetime[['station_name', 'fullname', 'phone', 'date_update', 'storage', 'recruiter_call', 'recruiter_call_date', 'hm_interview', 'hm_interview_date', 'offering', 'offering_date', 'accept_date', 'accept', 'onboard_date', 'onboard', 'channel_by_prod', 'pic', 'position', 'area', 'station_type']]
     nationwide_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1rBfFxs8fsidwV0RbspHiTSQHuE-AoNPDMFfOfTsFbyQ/edit?gid=1531624287#gid=1531624287')
-    nationwide = nationwide_spreadsheet.worksheet("Raw Tracker")
-    nationwide.clear()  # Xóa dữ liệu cũ
-    nationwide.update([data.columns.values.tolist()] + data.values.tolist())
+    nationwide_sheet = nationwide_spreadsheet.worksheet("Raw Tracker")
+    nationwide_sheet.clear()  # Xóa dữ liệu cũ
+    nationwide_sheet.update([data_nationwide.columns.values.tolist()] + data_nationwide.values.tolist(),value_input_option=gspread.utils.ValueInputOption.user_entered)
 if __name__ == "__main__":
     main()

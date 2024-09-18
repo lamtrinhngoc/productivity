@@ -67,5 +67,7 @@ def main():
     nationwide_sheet = nationwide_spreadsheet.worksheet("Raw Tracker")
     nationwide_sheet.clear()  # Xóa dữ liệu cũ
     nationwide_sheet.update([data_nationwide.columns.values.tolist()] + data_nationwide.values.tolist(),value_input_option=gspread.utils.ValueInputOption.user_entered)
+    nationwide_sheet.update_cell(2, 21, '=arrayformula(if(R2:R = "Rider",XLOOKUP(A2,'Priority - Rider'!$C:$C,'Priority - Rider'!$AR:$AR),XLOOKUP(A2:A&R2:R,'Priority - FTE'!$A:$A,'Priority - FTE'!$AS:$AS)))')
+    nationwide_sheet.update_cell(1, 21, 'priority')
 if __name__ == "__main__":
     main()

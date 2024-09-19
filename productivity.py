@@ -1,21 +1,19 @@
 import os
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 from google.oauth2.service_account import Credentials
 import pandas as pd
 import logging
 import time
 from datetime import datetime
-
+from requests.exceptions import JSONDecodeError
 
 # Cấu hình logging
 logging.basicConfig(level=logging.INFO)
 
 def main():
     # Xác thực và tạo client cho gspread
-    
     scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-    creds = Credentials.from_service_account_file('credentials.json', scopes = scopes)
+    creds = Credentials.from_service_account_file('credentials.json', scopes=scopes)
     client = gspread.authorize(creds)
 
     def open_spreadsheet_by_url(url):
@@ -24,12 +22,12 @@ def main():
         except gspread.exceptions.APIError as e:
             logging.error(f"Không thể mở bảng. Lỗi: {e}")
             return None
-            
+
     with open('link', 'r') as file:
         link_spreadsheet_url = file.read().strip()
     with open('master', 'r') as file:
         master_spreadsheet_url = file.read().strip()
-        
+
     # Mở spreadsheet chứa danh sách các link
     link_spreadsheet = open_spreadsheet_by_url(link_spreadsheet_url)
     if link_spreadsheet is None:
@@ -41,7 +39,7 @@ def main():
     data = link_sheet.get_all_records()
     df_links = pd.DataFrame(data)
     sheet_urls = df_links['Link'].tolist()
-    sheet_names = df_links[['Sheet 1', 'Sheet 2', 'Sheet 3','Sheet 4','Sheet 5']].values.tolist()
+    sheet_names = df_links[['Sheet 1', 'Sheet 2', 'Sheet 3', 'Sheet 4', 'Sheet 5']].values.tolist()
 
     # Mở spreadsheet tổng
     master_spreadsheet = open_spreadsheet_by_url(master_spreadsheet_url)
@@ -50,14 +48,14 @@ def main():
 
     master_sheet = master_spreadsheet.worksheet("Productivity")
     schema = [
-    "date_update", "date_cdd_applied", "fullname", "source", "dob", "phone", "area", 
-    "address", "registration_area", "previous_work", "id_code", "note", "email", "rehire", 
-    "current_salary", "expected_ob_date", "position", "station_name", "storage", 
-    "reason_for_storage", "notes_for_recruitment", "recruiter_call", "recruiter_call_date", 
-    "recruiter_call_feedback", "recruiter_call_result", "hm_interview_date", "hm_interview", 
-    "hm_interview_feedback", "hm_interview_result", "offering", "offering_date", "accept", 
-    "accept_date", "onboard_date", "onboard", "reason_reject_ob", "finish_process", 
-    "fullname_ob", "phone_ob", "id_code_ob", "pic"
+        "date_update", "date_cdd_applied", "fullname", "source", "dob", "phone", "area", 
+        "address", "registration_area", "previous_work", "id_code", "note", "email", "rehire", 
+        "current_salary", "expected_ob_date", "position", "station_name", "storage", 
+        "reason_for_storage", "notes_for_recruitment", "recruiter_call", "recruiter_call_date", 
+        "recruiter_call_feedback", "recruiter_call_result", "hm_interview_date", "hm_interview", 
+        "hm_interview_feedback", "hm_interview_result", "offering", "offering_date", "accept", 
+        "accept_date", "onboard_date", "onboard", "reason_reject_ob", "finish_process", 
+        "fullname_ob", "phone_ob", "id_code_ob", "pic"
     ]
 
     # Hàm để đọc dữ liệu từ một sheet và trả về DataFrame
@@ -79,6 +77,15 @@ def main():
             return df
         except gspread.exceptions.WorksheetNotFound:
             logging.error(f"Không tìm thấy sheet với tên {sheet_name}")
+            return pd.DataFrame()
+        except JSONDecodeError as e:
+            logging.error(f"Lỗi JSONDecodeError khi đọc dữ liệu từ {sheet_name}: {e}")
+            return pd.DataFrame()
+        except gspread.exceptions.APIError as e:
+            logging.error(f"Lỗi API khi đọc dữ liệu từ {sheet_name}: {e}")
+            return pd.DataFrame()
+        except Exception as e:
+            logging.error(f"Lỗi không mong muốn khi đọc dữ liệu từ {sheet_name}: {e}")
             return pd.DataFrame()
 
     # Tổng hợp dữ liệu từ tất cả các sheet

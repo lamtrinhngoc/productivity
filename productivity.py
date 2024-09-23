@@ -109,12 +109,12 @@ def main():
 
     # Ghi dữ liệu tổng hợp vào sheet tổng
     def try_parsing_date(text):
-    for fmt in ('%d-%m-%Y', '%Y/%m/%d', '%B %d, %Y', '%Y.%m.%d', '%d/%m/%Y', '%d-%b-%y'):
-        try:
-            return pd.to_datetime(text, format=fmt)
-        except ValueError:
-            pass
-    return pd.NaT
+        for fmt in ('%d-%m-%Y', '%Y/%m/%d', '%B %d, %Y', '%Y.%m.%d', '%d/%m/%Y', '%d-%b-%y'):
+            try:
+                return pd.to_datetime(text, format=fmt)
+            except ValueError:
+                pass
+        return pd.NaT
     for col in ["date_update", "date_cdd_applied", "recruiter_call_date", "hm_interview_date", "offering_date", "accept_date", "onboard_date"]:
         all_data[col] = all_data[col].apply(try_parsing_date).dt.strftime('%Y-%m-%d')
     all_data.replace([float('inf'), float('-inf')], '', inplace=True)

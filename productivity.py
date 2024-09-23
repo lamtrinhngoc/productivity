@@ -23,13 +23,8 @@ def main():
             logging.error(f"Không thể mở bảng. Lỗi: {e}")
             return None
 
-    with open('link', 'r') as file:
-        link_spreadsheet_url = file.read().strip()
-    with open('master', 'r') as file:
-        master_spreadsheet_url = file.read().strip()
-
     # Mở spreadsheet chứa danh sách các link
-    link_spreadsheet = open_spreadsheet_by_url(link_spreadsheet_url)
+    link_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/10eMZVnmtyyr5JAzDvpE5Brgh-8fw3lEKmGvL5m6eCUY/edit?gid=0#gid=0')
     if link_spreadsheet is None:
         raise Exception("Không thể mở bảng chứa danh sách các link. Kiểm tra quyền truy cập và URL.")
 
@@ -42,7 +37,7 @@ def main():
     sheet_names = df_links[['Sheet 1', 'Sheet 2', 'Sheet 3', 'Sheet 4', 'Sheet 5']].values.tolist()
 
     # Mở spreadsheet tổng
-    master_spreadsheet = open_spreadsheet_by_url(master_spreadsheet_url)
+    master_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1VlXicEr1FGrpdDcRpuv1aE2TAG-7QHEfWKNtFJF4nc8/edit?gid=0#gid=0')
     if master_spreadsheet is None:
         raise Exception("Không thể mở bảng tổng. Kiểm tra quyền truy cập và URL.")
 
@@ -59,34 +54,41 @@ def main():
     ]
 
     # Hàm để đọc dữ liệu từ một sheet và trả về DataFrame
-    def get_sheet_data(url, sheet_name, schema):
+    def get_sheet_data(url, sheet_name, schema, retries=3):
         sheet = open_spreadsheet_by_url(url)
         if sheet is None:
             return pd.DataFrame(columns=schema)
-        try:
-            worksheet = sheet.worksheet(sheet_name)
-            data = worksheet.get('B8:AP')
-            df = pd.DataFrame(data)  # Chuyển dữ liệu thành DataFrame
-            
-            # Chỉ loại bỏ các dòng mà tất cả các ô từ cột B đến cột E trống
-            df.dropna(subset=df.columns[1:5], how='all', inplace=True)
+        
+        attempt = 0
+        while attempt < retries:
+            try:
+                worksheet = sheet.worksheet(sheet_name)
+                data = worksheet.get('B8:AP')
+                df = pd.DataFrame(data)  # Chuyển dữ liệu thành DataFrame
+                
+                # Chỉ loại bỏ các dòng mà tất cả các ô từ cột B đến cột E trống
+                df.dropna(subset=df.columns[1:8], how='all', inplace=True)
 
-            # Đảm bảo rằng DataFrame có các cột theo schema
-            df.columns = schema[:len(df.columns)]
-            df = df.reindex(columns=schema)
-            return df
-        except gspread.exceptions.WorksheetNotFound:
-            logging.error(f"Không tìm thấy sheet với tên {sheet_name}")
-            return pd.DataFrame()
-        except JSONDecodeError as e:
-            logging.error(f"Lỗi JSONDecodeError khi đọc dữ liệu từ {sheet_name}: {e}")
-            return pd.DataFrame()
-        except gspread.exceptions.APIError as e:
-            logging.error(f"Lỗi API khi đọc dữ liệu từ {sheet_name}: {e}")
-            return pd.DataFrame()
-        except Exception as e:
-            logging.error(f"Lỗi không mong muốn khi đọc dữ liệu từ {sheet_name}: {e}")
-            return pd.DataFrame()
+                # Đảm bảo rằng DataFrame có các cột theo schema
+                df.columns = schema[:len(df.columns)]
+                df = df.reindex(columns=schema)
+                return df
+            except gspread.exceptions.WorksheetNotFound:
+                logging.error(f"Không tìm thấy sheet với tên {sheet_name}")
+                return pd.DataFrame(columns=schema)
+            except JSONDecodeError as e:
+                logging.error(f"Lỗi JSONDecodeError khi đọc dữ liệu từ {sheet_name}: {e}")
+            except gspread.exceptions.APIError as e:
+                logging.error(f"Lỗi API khi đọc dữ liệu từ {sheet_name}: {e}")
+            except Exception as e:
+                logging.error(f"Lỗi không mong muốn khi đọc dữ liệu từ {sheet_name}: {e}")
+            
+            attempt += 1
+            logging.info(f"Thử lại lần {attempt} cho sheet '{sheet_name}'")
+            time.sleep(5)  # Chờ 5 giây trước khi thử lại
+        
+        logging.error(f"Không thể đọc dữ liệu từ sheet '{sheet_name}' sau {retries} lần thử")
+        return pd.DataFrame(columns=schema)
 
     # Tổng hợp dữ liệu từ tất cả các sheet
     all_data = pd.DataFrame(columns=schema)
@@ -106,8 +108,15 @@ def main():
                     time.sleep(70)  # Chờ 1 phút
 
     # Ghi dữ liệu tổng hợp vào sheet tổng
+    def try_parsing_date(text):
+    for fmt in ('%d-%m-%Y', '%Y/%m/%d', '%B %d, %Y', '%Y.%m.%d', '%d/%m/%Y', '%d-%b-%y'):
+        try:
+            return pd.to_datetime(text, format=fmt)
+        except ValueError:
+            pass
+    return pd.NaT
     for col in ["date_update", "date_cdd_applied", "recruiter_call_date", "hm_interview_date", "offering_date", "accept_date", "onboard_date"]:
-        all_data[col] = pd.to_datetime(all_data[col], errors='coerce').dt.strftime('%Y-%m-%d')
+        all_data[col] = all_data[col].apply(try_parsing_date).dt.strftime('%Y-%m-%d')
     all_data.replace([float('inf'), float('-inf')], '', inplace=True)
     all_data.fillna('', inplace=True)
     master_sheet.clear()  # Xóa dữ liệu cũ

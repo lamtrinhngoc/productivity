@@ -109,7 +109,7 @@ def main():
 
     # Ghi dữ liệu tổng hợp vào sheet tổng
     def try_parsing_date(text):
-        for fmt in ('%d-%m-%Y', '%Y/%m/%d', '%B %d, %Y', '%Y.%m.%d', '%d/%m/%Y', '%d-%b-%y'):
+        for fmt in ('%d-%m-%Y', '%Y/%m/%d', '%B %d, %Y', '%Y.%m.%d', '%d/%m/%Y', '%d-%b-%y',,'%d-%b-%Y'):
             try:
                 return pd.to_datetime(text, format=fmt)
             except ValueError:

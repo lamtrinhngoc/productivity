@@ -69,7 +69,7 @@ def main():
     if link_spreadsheet is None:
         raise Exception("Không thể mở bảng chứa danh sách các link. Kiểm tra quyền truy cập và URL.")
 
-    link_sheet = link_spreadsheet.worksheet("Overview")
+    link_sheet = link_spreadsheet.worksheet("Productivity File")
     data = link_sheet.get_all_records()
     df_links = pd.DataFrame(data)
     sheet_urls = df_links['Link'].tolist()

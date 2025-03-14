@@ -65,7 +65,6 @@ def main():
     data_nationwide = filter_datetime[['station_name', 'fullname', 'phone', 'date_update', 'storage', 'recruiter_call', 'recruiter_call_date', 'hm_interview', 'hm_interview_date', 'offering', 'offering_date', 'accept_date', 'accept', 'onboard_date', 'onboard', 'channel_by_prod', 'pic', 'position', 'area', 'station_type']]
     nationwide_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1rBfFxs8fsidwV0RbspHiTSQHuE-AoNPDMFfOfTsFbyQ/edit?gid=1531624287#gid=1531624287')
     nationwide_sheet = nationwide_spreadsheet.worksheet("Raw Tracker")
-    nationwide_sheet.clear()  # Xóa dữ liệu cũ
     nationwide_sheet.update([data_nationwide.columns.values.tolist()] + data_nationwide.values.tolist(),value_input_option=gspread.utils.ValueInputOption.user_entered)
     nationwide_sheet.update_cell(2, 21, '=ARRAYFORMULA(IF(R2:R = "Rider", XLOOKUP(A2:A, \'Priority - Rider\'!$C:$C, \'Priority - Rider\'!$AR:$AR), XLOOKUP(A2:A & R2:R, \'Priority - FTE\'!$A:$A, \'Priority - FTE\'!$AS:$AS)))')
     nationwide_sheet.update_cell(1, 21, 'priority')

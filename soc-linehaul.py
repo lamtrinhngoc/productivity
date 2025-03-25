@@ -31,12 +31,12 @@ def main():
     df_all_member_productivity = df_all_member_productivity.astype(str)
 
     # Process phone numbers and positions
-    df_all_member_productivity['phone'] = df_all_member_productivity.apply(
-        lambda row: row['phone_ob'][-9:] if row['phone_ob'] else row['phone'][-9:], axis=1
-    )
-    df_all_member_productivity['position'] = df_all_member_productivity['position'].apply(
-        lambda x: 'Rider' if 'Rider' in x else 'FTE Staff' if 'Staff' in x else 'Driver' if 'Driver' in x else None
-    )
+    # df_all_member_productivity['phone'] = df_all_member_productivity.apply(
+    #     lambda row: row['phone_ob'][-9:] if row['phone_ob'] else row['phone'][-9:], axis=1
+    # )
+    # df_all_member_productivity['position'] = df_all_member_productivity['position'].apply(
+    #     lambda x: 'Rider' if 'Rider' in x else 'FTE Staff' if 'Staff' in x else 'Driver' if 'Driver' in x else None
+    # )
 
     # Define date columns and filter data
     date_columns = ['date_update', 'recruiter_call_date', 'hm_interview_date', 'offering_date', 'accept_date', 'onboard_date']

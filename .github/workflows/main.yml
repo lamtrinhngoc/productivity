@@ -43,4 +43,4 @@ jobs:
         
     - name: Run nationwide script
       run: |
-        python "SOC & LineHaul.py"
+        python "soc-linehaul.py"

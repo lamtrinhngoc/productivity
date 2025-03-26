@@ -43,4 +43,4 @@ jobs:
         
     - name: Run nationwide script
       run: |
-        python "soc-linehaul.py"
+        python "extract-productivity.py"

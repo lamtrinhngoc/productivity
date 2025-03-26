@@ -96,6 +96,10 @@ def main():
 
     scheme_efficiency = df_all_member_productivity[df_all_member_productivity['date_update'] >= two_months_ago]
 
+    scheme_efficiency['position'] = scheme_efficiency['position'].apply(
+        lambda x: 'Rider' if 'Rider' in x else 'FTE Staff' if 'Staff' in x else 'Driver' if 'Driver' in x else None
+    )
+
     for col in date_columns:
         scheme_efficiency[col] = scheme_efficiency[col].dt.strftime('%Y-%m-%d')
 

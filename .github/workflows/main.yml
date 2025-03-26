@@ -2,21 +2,21 @@ name: productivity
 
 on:
   schedule:
-    - cron: '*/30 * * * *'  # Chạy mỗi 30 phút
-  workflow_dispatch:  # Cho phép chạy thủ công
+    - cron: '*/30 * * * *'  # Runs every 30 minutes
+  workflow_dispatch:  # Allows manual run
 
 jobs:
   aggregate:
     runs-on: ubuntu-latest
 
     steps:
-    - name: checkout repo content
-      uses: actions/checkout@v4 # checkout the repository content to GitHub runner
+    - name: Checkout repo content
+      uses: actions/checkout@v4
 
-    - name: setup python
+    - name: Setup Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.9' # install the python version needed
+        python-version: '3.9'
 
     - name: Install dependencies
       run: |
@@ -28,7 +28,7 @@ jobs:
         GOOGLE_APPLICATION_CREDENTIALS: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
       run: |
         echo "$GOOGLE_APPLICATION_CREDENTIALS" > credentials.json
-        
+
     - name: Set environment variables
       env:
         LINK: ${{ secrets.LINK }}
@@ -37,10 +37,18 @@ jobs:
         echo "$LINK" > link
         echo "$MASTER" > master
 
+    - name: Check current time
+      run: |
+        current_hour=$(date +"%H")
+        if [ $current_hour -ge 20 ] || [ $current_hour -lt 7 ]; then
+          echo "Current time is outside the allowed range. Exiting."
+          exit 0
+        fi
+
     - name: Run productivity script
       run: |
         python productivity.py
-        
+
     - name: Run nationwide script
       run: |
         python "extract-productivity.py"

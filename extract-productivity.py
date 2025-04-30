@@ -62,6 +62,7 @@ def main():
         return
 
     soc_linehaul_sheet = soc_linehaul_spreadsheet.worksheet("Raw Productivity")
+    soc_linehaul_sheet.clear()
     soc_linehaul_sheet.update(
         [soc_linehaul.columns.values.tolist()] + soc_linehaul.values.tolist(),
         value_input_option='USER_ENTERED'
@@ -85,6 +86,7 @@ def main():
         return
 
     binh_duong_sheet = binh_duong_spreadsheet.worksheet("Raw Productivity'")
+    binh_duong_sheet.clear()
     binh_duong_sheet.update(
         [binh_duong.columns.values.tolist()] + binh_duong.values.tolist(),
         value_input_option='USER_ENTERED'
@@ -111,6 +113,7 @@ def main():
         return
 
     scheme_efficiency_sheet = scheme_efficiency_spreadsheet.worksheet("Raw Productivity")
+    scheme_efficiency_sheet.clear()
     scheme_efficiency_sheet.update(
         [scheme_efficiency.columns.values.tolist()] + scheme_efficiency.values.tolist(),
         value_input_option='USER_ENTERED'

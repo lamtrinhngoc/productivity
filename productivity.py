@@ -111,6 +111,7 @@ def main():
     
     all_data.replace([float('inf'), float('-inf')], '', inplace=True)
     all_data.fillna('', inplace=True)
+    master_sheet.clear()
     master_sheet.update([all_data.columns.values.tolist()] + all_data.values.tolist())
     master_sheet.update_cell(2, 42, '=ARRAYFORMULA(ifna(XLOOKUP(D2:D,Source!$A:$A,Source!$C:$C)))')
     master_sheet.update_cell(2, 43, '=ARRAYFORMULA(ifna(XLOOKUP(AO2:AO,Info!$C:$C,Info!$N:$N)))')

@@ -92,6 +92,34 @@ def main():
         value_input_option='USER_ENTERED'
     )
 
+    # File [WFA] Performance Management | HCM+South SOC_Staff
+
+    hcm_south_socstaff = df_all_member_productivity[
+        (df_all_member_productivity['team'] == "Gia Han") |
+        (df_all_member_productivity['team'] == "Hoa Bui"))
+    ]
+
+    hcm_south_socstaff['station_name'] = hcm_south_socstaff['station_name'].apply(
+    lambda x: 'BD A Mega SOC' if 'Binh Duong SOC' in x else x
+    )
+
+    for col in date_columns:
+        hcm_south_socstaff[col] = hcm_south_socstaff[col].dt.strftime('%Y-%m-%d')
+
+    hcm_south_socstaff = hcm_south_socstaff.replace({np.nan: '', np.inf: '', -np.inf: ''})
+
+    # Open the target spreadsheet and update with filtered data
+    hcm_south_socstaff_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1E-kFjoHSmOnrDK_O4tpegxBh5qh4wTxfhvMXoL-p5O4/edit?gid=1640866954#gid=1640866954')
+    if hcm_south_socstaff_spreadsheet is None:
+        return
+
+    hcm_south_socstaff_sheet = hcm_south_socstaff_spreadsheet.worksheet("Raw Productivity'")
+    hcm_south_socstaff_sheet.clear()
+    hcm_south_socstaff_sheet.update(
+        [hcm_south_socstaff.columns.values.tolist()] + hcm_south_socstaff.values.tolist(),
+        value_input_option='USER_ENTERED'
+    )
+
     # # File Nationwide Scheme Efficiency
 
     # two_months_ago = pd.Timestamp.today().replace(day=1) - pd.DateOffset(months=2)

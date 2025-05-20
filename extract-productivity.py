@@ -109,11 +109,11 @@ def main():
     hcm_south_socstaff = hcm_south_socstaff.replace({np.nan: '', np.inf: '', -np.inf: ''})
 
     # Open the target spreadsheet and update with filtered data
-    hcm_south_socstaff_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1E-kFjoHSmOnrDK_O4tpegxBh5qh4wTxfhvMXoL-p5O4/edit?gid=1640866954#gid=1640866954')
+    hcm_south_socstaff_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1E-kFjoHSmOnrDK_O4tpegxBh5qh4wTxfhvMXoL-p5O4/edit?gid=878785738#gid=878785738')
     if hcm_south_socstaff_spreadsheet is None:
         return
 
-    hcm_south_socstaff_sheet = hcm_south_socstaff_spreadsheet.worksheet("Raw Productivity'")
+    hcm_south_socstaff_sheet = hcm_south_socstaff_spreadsheet.worksheet("Raw Productivity")
     hcm_south_socstaff_sheet.clear()
     hcm_south_socstaff_sheet.update(
         [hcm_south_socstaff.columns.values.tolist()] + hcm_south_socstaff.values.tolist(),

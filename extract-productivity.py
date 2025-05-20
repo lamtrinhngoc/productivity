@@ -100,7 +100,7 @@ def main():
     ]
 
     hcm_south_socstaff['station_name'] = hcm_south_socstaff['station_name'].apply(
-    lambda x: 'BD A Mega SOC' if 'Binh Duong SOC' in x else x
+    lambda x: 'BD A Mega SOC' if 'Binh Duong' in x and 'SOC' in x else x
     )
 
     for col in date_columns:

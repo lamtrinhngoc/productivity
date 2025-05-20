@@ -92,32 +92,32 @@ def main():
         value_input_option='USER_ENTERED'
     )
 
-    # File Nationwide Scheme Efficiency
+    # # File Nationwide Scheme Efficiency
 
-    two_months_ago = pd.Timestamp.today().replace(day=1) - pd.DateOffset(months=2)
+    # two_months_ago = pd.Timestamp.today().replace(day=1) - pd.DateOffset(months=2)
 
-    scheme_efficiency = df_all_member_productivity[df_all_member_productivity['date_update'] >= two_months_ago]
+    # scheme_efficiency = df_all_member_productivity[df_all_member_productivity['date_update'] >= two_months_ago]
 
-    scheme_efficiency['position'] = scheme_efficiency['position'].apply(
-        lambda x: 'Rider' if 'Rider' in x else 'FTE Staff' if 'Staff' in x else 'Driver' if 'Driver' in x else None
-    )
+    # scheme_efficiency['position'] = scheme_efficiency['position'].apply(
+    #     lambda x: 'Rider' if 'Rider' in x else 'FTE Staff' if 'Staff' in x else 'Driver' if 'Driver' in x else None
+    # )
 
-    for col in date_columns:
-        scheme_efficiency[col] = scheme_efficiency[col].dt.strftime('%Y-%m-%d')
+    # for col in date_columns:
+    #     scheme_efficiency[col] = scheme_efficiency[col].dt.strftime('%Y-%m-%d')
 
-    scheme_efficiency = scheme_efficiency.replace({np.nan: '', np.inf: '', -np.inf: ''})
+    # scheme_efficiency = scheme_efficiency.replace({np.nan: '', np.inf: '', -np.inf: ''})
 
-    # Open the target spreadsheet and update with filtered data
-    scheme_efficiency_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1ZghVwm_7cniD1CdFNwXz9gOjoggUqzxxznqT0hTDLk0/edit?gid=0#gid=0')
-    if scheme_efficiency_spreadsheet is None:
-        return
+    # # Open the target spreadsheet and update with filtered data
+    # scheme_efficiency_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1ZghVwm_7cniD1CdFNwXz9gOjoggUqzxxznqT0hTDLk0/edit?gid=0#gid=0')
+    # if scheme_efficiency_spreadsheet is None:
+    #     return
 
-    scheme_efficiency_sheet = scheme_efficiency_spreadsheet.worksheet("Raw Productivity")
-    scheme_efficiency_sheet.clear()
-    scheme_efficiency_sheet.update(
-        [scheme_efficiency.columns.values.tolist()] + scheme_efficiency.values.tolist(),
-        value_input_option='USER_ENTERED'
-    )
+    # scheme_efficiency_sheet = scheme_efficiency_spreadsheet.worksheet("Raw Productivity")
+    # scheme_efficiency_sheet.clear()
+    # scheme_efficiency_sheet.update(
+    #     [scheme_efficiency.columns.values.tolist()] + scheme_efficiency.values.tolist(),
+    #     value_input_option='USER_ENTERED'
+    # )
 
 if __name__ == "__main__":
     main()

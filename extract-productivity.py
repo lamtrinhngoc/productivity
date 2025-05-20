@@ -96,7 +96,7 @@ def main():
 
     hcm_south_socstaff = df_all_member_productivity[
         (df_all_member_productivity['team'] == "Gia Han") |
-        (df_all_member_productivity['team'] == "Hoa Bui"))
+        (df_all_member_productivity['team'] == "Hoa Bui")
     ]
 
     hcm_south_socstaff['station_name'] = hcm_south_socstaff['station_name'].apply(

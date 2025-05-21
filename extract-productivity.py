@@ -103,6 +103,10 @@ def main():
     lambda x: 'BD A Mega SOC' if 'Binh Duong' in x and 'SOC' in x else x
     )
 
+    hcm_south_socstaff['position'] = hcm_south_socstaff['position'].apply(
+    lambda x: 'FTE Staff' if '3. Staff' in x else ('Driver' if '6. Driver' in x else x)
+    )
+
     for col in date_columns:
         hcm_south_socstaff[col] = hcm_south_socstaff[col].dt.strftime('%Y-%m-%d')
 

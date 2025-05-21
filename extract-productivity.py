@@ -106,6 +106,11 @@ def main():
     hcm_south_socstaff['position'] = hcm_south_socstaff['position'].apply(
     lambda x: 'FTE Staff' if '3. Staff' in x else ('Driver' if '6. Driver' in x else x)
     )
+    
+    hcm_south_socstaff['area'] = hcm_south_socstaff['area'].apply(
+    lambda x: 'South' if x in ['SE', 'SW'] else ('HNI' if x == 'HN' else x)
+    )
+
 
     for col in date_columns:
         hcm_south_socstaff[col] = hcm_south_socstaff[col].dt.strftime('%Y-%m-%d')

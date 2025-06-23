@@ -70,27 +70,27 @@ def main():
 
     # File BD Projection (c Hân)
 
-    binh_duong = df_all_member_productivity[
-        (df_all_member_productivity['team'] == "Gia Han") |
-        (df_all_member_productivity['station_name'].str.contains("Binh Duong 1 SOC", na=False))
-    ]
+    # binh_duong = df_all_member_productivity[
+    #     (df_all_member_productivity['team'] == "Gia Han") |
+    #     (df_all_member_productivity['station_name'].str.contains("Binh Duong 1 SOC", na=False))
+    # ]
 
-    for col in date_columns:
-        binh_duong[col] = binh_duong[col].dt.strftime('%Y-%m-%d')
+    # for col in date_columns:
+    #     binh_duong[col] = binh_duong[col].dt.strftime('%Y-%m-%d')
 
-    binh_duong = binh_duong.replace({np.nan: '', np.inf: '', -np.inf: ''})
+    # binh_duong = binh_duong.replace({np.nan: '', np.inf: '', -np.inf: ''})
 
-    # Open the target spreadsheet and update with filtered data
-    binh_duong_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1A7hwKMN74dMCFUJ_QF1cGy41FdGAOQhga19l_I3O01Y/edit?gid=0#gid=0')
-    if binh_duong_spreadsheet is None:
-        return
+    # # Open the target spreadsheet and update with filtered data
+    # binh_duong_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1A7hwKMN74dMCFUJ_QF1cGy41FdGAOQhga19l_I3O01Y/edit?gid=0#gid=0')
+    # if binh_duong_spreadsheet is None:
+    #     return
 
-    binh_duong_sheet = binh_duong_spreadsheet.worksheet("Raw Productivity'")
-    binh_duong_sheet.clear()
-    binh_duong_sheet.update(
-        [binh_duong.columns.values.tolist()] + binh_duong.values.tolist(),
-        value_input_option='USER_ENTERED'
-    )
+    # binh_duong_sheet = binh_duong_spreadsheet.worksheet("Raw Productivity'")
+    # binh_duong_sheet.clear()
+    # binh_duong_sheet.update(
+    #     [binh_duong.columns.values.tolist()] + binh_duong.values.tolist(),
+    #     value_input_option='USER_ENTERED'
+    # )
 
     # File [WFA] Performance Management | HCM+South SOC_Staff
 

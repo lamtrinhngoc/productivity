@@ -99,6 +99,9 @@ def main():
 
     hcm_south_socstaff = df_all_member_productivity[
         (df_all_member_productivity['team'] == "Gia Han") |
+        (df_all_member_productivity['team'] == "Yen Phan") |
+        (df_all_member_productivity['team'] == "Cam Giang") |
+        (df_all_member_productivity['team'] == "Yen Nhi") |
         (df_all_member_productivity['team'] == "Hoa Bui")
     ]
 

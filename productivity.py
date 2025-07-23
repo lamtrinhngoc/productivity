@@ -43,6 +43,7 @@ def read_worksheet_with_retry(sheet, sheet_name, schema):
     df = pd.DataFrame(data)
     df.columns = schema[:len(df.columns)]
     df = df.reindex(columns=schema)
+    df = df.fillna('')
     df['date_update'] = df['date_update'].apply(try_parsing_date)
     df = df[df['date_update'] >= pd.Timestamp("2025-01-01")]
     return df

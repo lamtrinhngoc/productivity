@@ -37,7 +37,7 @@ class GSpreadClientWithCache:
 )
 def read_worksheet_with_retry(sheet, sheet_name, schema):
     worksheet = sheet.worksheet(sheet_name)
-    data = worksheet.get_all_values()[7:]  # Bỏ 7 dòng đầu tương đương B8
+    data = worksheet. worksheet.get('B8:AP') 
     if not data:
         return pd.DataFrame(columns=schema)
     df = pd.DataFrame(data)

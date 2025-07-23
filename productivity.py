@@ -110,6 +110,10 @@ def main():
     api_call_count = 0
 
     for url, names in zip(sheet_urls, sheet_names):
+        if not url or not isinstance(url, str) or not url.strip():
+            logging.warning("Bỏ qua một dòng vì không có URL hợp lệ.")
+            continue  # Bỏ qua nếu URL trống
+            
         for name in names:
             if name:
                 logging.info(f"Đang xử lý sheet '{name}'")

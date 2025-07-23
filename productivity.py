@@ -74,7 +74,7 @@ def main():
     client = GSpreadClientWithCache(authenticate_gspread())
 
     # Mở bảng danh sách links
-    link_spreadsheet = client.open_by_url('https://docs.google.com/spreadsheets/d/10eMZVnmtyyr5JAzDvpE5Brgh-8fw3lEKmGvL5m6eCUY/edit?gid=0#gid=0')
+    link_spreadsheet = client.open_by_url('https://docs.google.com/spreadsheets/d/10eMZVnmtyyr5JAzDvpE5Brgh-8fw3lEKmGvL5m6eCUY')
     if link_spreadsheet is None:
         raise Exception("Không thể mở bảng chứa danh sách các link. Kiểm tra quyền truy cập và URL.")
 
@@ -90,7 +90,7 @@ def main():
     sheet_names = df_links[['Sheet 1', 'Sheet 2', 'Sheet 3', 'Sheet 4', 'Sheet 5']].values.tolist()
 
     # Mở bảng tổng
-    master_spreadsheet = client.open_by_url('https://docs.google.com/spreadsheets/d/1VlXicEr1FGrpdDcRpuv1aE2TAG-7QHEfWKNtFJF4nc8/edit?gid=0#gid=0')
+    master_spreadsheet = client.open_by_url('https://docs.google.com/spreadsheets/d/1VlXicEr1FGrpdDcRpuv1aE2TAG-7QHEfWKNtFJF4nc8')
     if master_spreadsheet is None:
         raise Exception("Không thể mở bảng tổng. Kiểm tra quyền truy cập và URL.")
 

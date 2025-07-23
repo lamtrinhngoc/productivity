@@ -140,17 +140,8 @@ def main():
         'range': 'AR1:AS1',
         'values': [['channel_by_prod', 'team']]
     }])
-    master_sheet.values_update(
-        'AR2',
-        params={'valueInputOption': 'USER_ENTERED'},
-        body={'values': [['=ARRAYFORMULA(IFNA(XLOOKUP(D2:D, Source!A:A, Source!C:C)))']]}
-    )
-    
-    master_sheet.values_update(
-        'AS2',
-        params={'valueInputOption': 'USER_ENTERED'},
-        body={'values': [['=ARRAYFORMULA(IFNA(XLOOKUP(AO2:AO, Info!C:C, Info!N:N)))']]}
-    )
+    master_sheet.update_cell(2, 44, '=ARRAYFORMULA(ifna(XLOOKUP(D2:D,Source!$A:$A,Source!$C:$C)))')
+    master_sheet.update_cell(2, 45, '=ARRAYFORMULA(ifna(XLOOKUP(AO2:AO,Info!$C:$C,Info!$N:$N)))')
 
     logging.info("Dữ liệu đã được tổng hợp thành công vào Master Spreadsheet!")
 

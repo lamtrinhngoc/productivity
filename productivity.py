@@ -64,7 +64,7 @@ def get_sheet_data(client, url, sheet_name, schema):
     return pd.DataFrame(columns=schema)
 
 def try_parsing_date(text):
-    for fmt in ('%y/%m/%d', '%Y/%m/%d', '%m/%d/%Y', '%m/%d/%y', '%d-%b-%y', '%d-%b-%Y'):
+    for fmt in ('%y/%m/%d', '%Y/%m/%d', '%m/%d/%Y', '%m/%d/%y', '%d-%b-%y', '%d-%b-%Y', '%Y-%m-%d'):
         try:
             return pd.to_datetime(text, format=fmt)
         except ValueError:

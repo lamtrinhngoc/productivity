@@ -45,31 +45,30 @@ def main():
 
     # File SOC & LineHaul Nationwide (c Hoa + c Hân)
 
-    soc_linehaul = df_all_member_productivity[
-        (df_all_member_productivity['team'] == "Hoa Bui") |
-        (df_all_member_productivity['team'] == "Gia Han") |
-        (df_all_member_productivity['team'] == "Yen Phan") |
-        (df_all_member_productivity['team'] == "Cam Giang") |
-        (df_all_member_productivity['team'] == "Yen Nhi") |
-        (df_all_member_productivity['position'].str.contains("Driver", na=False))
-    ]
+    # soc_linehaul = df_all_member_productivity[
+    #     (df_all_member_productivity['team'] == "Gia Han") |
+    #     (df_all_member_productivity['team'] == "Yen Phan") |
+    #     (df_all_member_productivity['team'] == "Cam Giang") |
+    #     (df_all_member_productivity['team'] == "Yen Nhi") |
+    #     (df_all_member_productivity['position'].str.contains("Driver", na=False))
+    # ]
 
-    for col in date_columns:
-        soc_linehaul[col] = soc_linehaul[col].dt.strftime('%Y-%m-%d')
+    # for col in date_columns:
+    #     soc_linehaul[col] = soc_linehaul[col].dt.strftime('%Y-%m-%d')
 
-    soc_linehaul = soc_linehaul.replace({np.nan: '', np.inf: '', -np.inf: ''})
+    # soc_linehaul = soc_linehaul.replace({np.nan: '', np.inf: '', -np.inf: ''})
 
-    # Open the target spreadsheet and update with filtered data
-    soc_linehaul_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1zHEWFEwyZ6zq88hUvQfEzqwipCnHpdaovIl8hXFhPPw/edit?gid=714896083#gid=714896083')
-    if soc_linehaul_spreadsheet is None:
-        return
+    # # Open the target spreadsheet and update with filtered data
+    # soc_linehaul_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1zHEWFEwyZ6zq88hUvQfEzqwipCnHpdaovIl8hXFhPPw/edit?gid=714896083#gid=714896083')
+    # if soc_linehaul_spreadsheet is None:
+    #     return
 
-    soc_linehaul_sheet = soc_linehaul_spreadsheet.worksheet("Raw Productivity")
-    soc_linehaul_sheet.clear()
-    soc_linehaul_sheet.update(
-        [soc_linehaul.columns.values.tolist()] + soc_linehaul.values.tolist(),
-        value_input_option='USER_ENTERED'
-    )
+    # soc_linehaul_sheet = soc_linehaul_spreadsheet.worksheet("Raw Productivity")
+    # soc_linehaul_sheet.clear()
+    # soc_linehaul_sheet.update(
+    #     [soc_linehaul.columns.values.tolist()] + soc_linehaul.values.tolist(),
+    #     value_input_option='USER_ENTERED'
+    # )
 
     # File BD Projection (c Hân)
 
@@ -95,45 +94,129 @@ def main():
     #     value_input_option='USER_ENTERED'
     # )
 
-    # File [WFA] Performance Management | HCM+South SOC_Staff
-
-    hcm_south_socstaff = df_all_member_productivity[
-        (df_all_member_productivity['team'] == "Gia Han") |
-        (df_all_member_productivity['team'] == "Yen Phan") |
-        (df_all_member_productivity['team'] == "Cam Giang") |
-        (df_all_member_productivity['team'] == "Yen Nhi") |
-        (df_all_member_productivity['team'] == "Hoa Bui")
-    ]
-
-    hcm_south_socstaff['station_name'] = hcm_south_socstaff['station_name'].apply(
+    df_all_member_productivity['station_name'] = df_all_member_productivity['station_name'].apply(
     lambda x: 'BD A Mega SOC' if 'Binh Duong' in x and 'SOC' in x else x
     )
 
-    hcm_south_socstaff['position'] = hcm_south_socstaff['position'].apply(
+    df_all_member_productivity['position'] = df_all_member_productivity['position'].apply(
     lambda x: 'FTE Staff' if '3. Staff' in x else ('Driver' if '6. Driver' in x else x)
     )
     
-    hcm_south_socstaff['area'] = hcm_south_socstaff['area'].apply(
+    df_all_member_productivity['area'] = df_all_member_productivity['area'].apply(
     lambda x: 'South' if x in ['SE', 'SW'] else ('HNI' if x == 'HN' else x)
     )
 
 
     for col in date_columns:
-        hcm_south_socstaff[col] = hcm_south_socstaff[col].dt.strftime('%Y-%m-%d')
+        df_all_member_productivity[col] = df_all_member_productivity[col].dt.strftime('%Y-%m-%d')
 
-    hcm_south_socstaff = hcm_south_socstaff.replace({np.nan: '', np.inf: '', -np.inf: ''})
+    df_all_member_productivity = df_all_member_productivity.replace({np.nan: '', np.inf: '', -np.inf: ''})
 
-    # Open the target spreadsheet and update with filtered data
-    hcm_south_socstaff_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1E-kFjoHSmOnrDK_O4tpegxBh5qh4wTxfhvMXoL-p5O4/edit?gid=878785738#gid=878785738')
-    if hcm_south_socstaff_spreadsheet is None:
+    # File [WFA] Performance Management | Yen Phan
+
+    yen_phan = df_all_member_productivity[
+        (df_all_member_productivity['team'] == "Gia Han") |
+        (df_all_member_productivity['team'] == "Yen Phan") |
+        (df_all_member_productivity['team'] == "Cam Giang") |
+        (df_all_member_productivity['team'] == "Yen Nhi")
+    ]
+    
+    yen_phan_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1E-kFjoHSmOnrDK_O4tpegxBh5qh4wTxfhvMXoL-p5O4')
+    if yen_phan_spreadsheet is None:
         return
 
-    hcm_south_socstaff_sheet = hcm_south_socstaff_spreadsheet.worksheet("Raw Productivity")
-    hcm_south_socstaff_sheet.clear()
-    hcm_south_socstaff_sheet.update(
-        [hcm_south_socstaff.columns.values.tolist()] + hcm_south_socstaff.values.tolist(),
+    yen_phan_sheet = yen_phan_spreadsheet.worksheet("Raw Productivity")
+    yen_phan_sheet.clear()
+    yen_phan_sheet.update(
+        [yen_phan.columns.values.tolist()] + yen_phan.values.tolist(),
         value_input_option='USER_ENTERED'
     )
+
+    # File [WFA] Performance Management | Minh Nguyet
+
+    minh_nguyet = df_all_member_productivity[
+        (df_all_member_productivity['team'] == "Minh Nguyet")
+    ]
+    
+    minh_nguyet_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1DCcJycFigvCWZz51jnyZtvMInHnJ0AGXAfg0B6WBq40')
+    if minh_nguyet_spreadsheet is None:
+        return
+
+    minh_nguyet_sheet = minh_nguyet_spreadsheet.worksheet("Raw Productivity")
+    minh_nguyet_sheet.clear()
+    minh_nguyet_sheet.update(
+        [minh_nguyet.columns.values.tolist()] + minh_nguyet.values.tolist(),
+        value_input_option='USER_ENTERED'
+    )
+
+    # File [WFA] Performance Management | Trinh Phan
+
+    trinh_phan = df_all_member_productivity[
+        (df_all_member_productivity['team'] == "Trinh Phan")
+    ]
+    
+    trinh_phan_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1Iwt_1x_KHzRAQZ9FEi0hBeGBfTrvbwxDyrjjGkz6VRU')
+    if trinh_phan_spreadsheet is None:
+        return
+
+    trinh_phan_sheet = trinh_phan_spreadsheet.worksheet("Raw Productivity")
+    trinh_phan_sheet.clear()
+    trinh_phan_sheet.update(
+        [trinh_phan.columns.values.tolist()] + trinh_phan.values.tolist(),
+        value_input_option='USER_ENTERED'
+    )
+
+    # File [WFA] Performance Management | Hoa Bui
+
+    hoa_bui = df_all_member_productivity[
+        (df_all_member_productivity['team'] == "Hoa Bui")
+    ]
+    
+    hoa_bui_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1oJ_UHIbolyFI616oyS_df1yv0NczeRputMtCjAis5AY')
+    if hoa_bui_spreadsheet is None:
+        return
+
+    hoa_bui_sheet = hoa_bui_spreadsheet.worksheet("Raw Productivity")
+    hoa_bui_sheet.clear()
+    hoa_bui_sheet.update(
+        [hoa_bui.columns.values.tolist()] + hoa_bui.values.tolist(),
+        value_input_option='USER_ENTERED'
+    )
+
+    # File [WFA] Performance Management | Huyen Trang
+
+    huyen_trang = df_all_member_productivity[
+        (df_all_member_productivity['team'] == "Huyen Trang")
+    ]
+    
+    huyen_trang_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1IT1rHY369YLNRLZ5UNQbVa3k2yeMiEvFXImEd9LmVJo')
+    if huyen_trang_spreadsheet is None:
+        return
+
+    huyen_trang_sheet = huyen_trang_spreadsheet.worksheet("Raw Productivity")
+    huyen_trang_sheet.clear()
+    huyen_trang_sheet.update(
+        [huyen_trang.columns.values.tolist()] + huyen_trang.values.tolist(),
+        value_input_option='USER_ENTERED'
+    )
+
+    # File [WFA] Performance Management | Thu Hien
+
+    thu_hien = df_all_member_productivity[
+        (df_all_member_productivity['team'] == "Thu Hien")
+    ]
+    
+    thu_hien_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1muT6hNa3uKPxiTjGCtQhCBGqPD0DsIYX4vS0yXSKVs8')
+    if thu_hien_spreadsheet is None:
+        return
+
+    thu_hien_sheet = thu_hien_spreadsheet.worksheet("Raw Productivity")
+    thu_hien_sheet.clear()
+    thu_hien_sheet.update(
+        [thu_hien.columns.values.tolist()] + thu_hien.values.tolist(),
+        value_input_option='USER_ENTERED'
+    )
+    
 
     # # File Nationwide Scheme Efficiency
 

@@ -99,7 +99,7 @@ def main():
     )
 
     df_all_member_productivity['position'] = df_all_member_productivity['position'].apply(
-    lambda x: 'FTE Staff' if '3. Staff' in x else ('Driver' if '6. Driver' in x else x)
+    lambda x: 'FTE Staff' if 'Staff' in x else ('Driver' if 'Driver' in x else ('Rider' if 'Rider' in x else x))
     )
     
     df_all_member_productivity['area'] = df_all_member_productivity['area'].apply(

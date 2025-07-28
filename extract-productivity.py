@@ -42,34 +42,7 @@ def main():
     date_columns = ['date_update', 'recruiter_call_date', 'hm_interview_date', 'offering_date', 'accept_date', 'onboard_date']
     for col in date_columns:
         df_all_member_productivity[col] = pd.to_datetime(df_all_member_productivity[col], errors='coerce')
-
-    # File SOC & LineHaul Nationwide (c Hoa + c Hân)
-
-    # soc_linehaul = df_all_member_productivity[
-    #     (df_all_member_productivity['team'] == "Gia Han") |
-    #     (df_all_member_productivity['team'] == "Yen Phan") |
-    #     (df_all_member_productivity['team'] == "Cam Giang") |
-    #     (df_all_member_productivity['team'] == "Yen Nhi") |
-    #     (df_all_member_productivity['position'].str.contains("Driver", na=False))
-    # ]
-
-    # for col in date_columns:
-    #     soc_linehaul[col] = soc_linehaul[col].dt.strftime('%Y-%m-%d')
-
-    # soc_linehaul = soc_linehaul.replace({np.nan: '', np.inf: '', -np.inf: ''})
-
-    # # Open the target spreadsheet and update with filtered data
-    # soc_linehaul_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1zHEWFEwyZ6zq88hUvQfEzqwipCnHpdaovIl8hXFhPPw/edit?gid=714896083#gid=714896083')
-    # if soc_linehaul_spreadsheet is None:
-    #     return
-
-    # soc_linehaul_sheet = soc_linehaul_spreadsheet.worksheet("Raw Productivity")
-    # soc_linehaul_sheet.clear()
-    # soc_linehaul_sheet.update(
-    #     [soc_linehaul.columns.values.tolist()] + soc_linehaul.values.tolist(),
-    #     value_input_option='USER_ENTERED'
-    # )
-
+        
     # File BD Projection (c Hân)
 
     # binh_duong = df_all_member_productivity[

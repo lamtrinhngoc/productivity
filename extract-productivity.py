@@ -216,7 +216,27 @@ def main():
         [thu_hien.columns.values.tolist()] + thu_hien.values.tolist(),
         value_input_option='USER_ENTERED'
     )
-    
+
+    # File SOC & LineHaul Nationwide (c Hoa + c Hân)
+
+    soc_linehaul = df_all_member_productivity[
+        (df_all_member_productivity['team'] == "Gia Han") |
+        (df_all_member_productivity['team'] == "Yen Phan") |
+        (df_all_member_productivity['team'] == "Cam Giang") |
+        (df_all_member_productivity['team'] == "Yen Nhi") |
+        (df_all_member_productivity['position'].str.contains("Driver", na=False))
+    ]
+
+    soc_linehaul_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1zHEWFEwyZ6zq88hUvQfEzqwipCnHpdaovIl8hXFhPPw')
+    if soc_linehaul_spreadsheet is None:
+        return
+
+    soc_linehaul_sheet = soc_linehaul_spreadsheet.worksheet("Raw Productivity")
+    soc_linehaul_sheet.clear()
+    soc_linehaul_sheet.update(
+        [soc_linehaul.columns.values.tolist()] + soc_linehaul.values.tolist(),
+        value_input_option='USER_ENTERED'
+    )
 
     # # File Nationwide Scheme Efficiency
 

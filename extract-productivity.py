@@ -30,50 +30,34 @@ def main():
     df_all_member_productivity = pd.DataFrame(master_data)
     df_all_member_productivity = df_all_member_productivity.astype(str)
 
-    # Process phone numbers and positions
-    # df_all_member_productivity['phone'] = df_all_member_productivity.apply(
-    #     lambda row: row['phone_ob'][-9:] if row['phone_ob'] else row['phone'][-9:], axis=1
-    # )
-    # df_all_member_productivity['position'] = df_all_member_productivity['position'].apply(
-    #     lambda x: 'Rider' if 'Rider' in x else 'FTE Staff' if 'Staff' in x else 'Driver' if 'Driver' in x else None
-    # )
-
     # Define date columns and filter data
     date_columns = ['date_update', 'recruiter_call_date', 'hm_interview_date', 'offering_date', 'accept_date', 'onboard_date']
     for col in date_columns:
         df_all_member_productivity[col] = pd.to_datetime(df_all_member_productivity[col], errors='coerce')
         
-    # File BD Projection (c Hân)
-
-    # binh_duong = df_all_member_productivity[
-    #     (df_all_member_productivity['team'] == "Gia Han") |
-    #     (df_all_member_productivity['station_name'].str.contains("Binh Duong 1 SOC", na=False))
-    # ]
-
-    # for col in date_columns:
-    #     binh_duong[col] = binh_duong[col].dt.strftime('%Y-%m-%d')
-
-    # binh_duong = binh_duong.replace({np.nan: '', np.inf: '', -np.inf: ''})
-
-    # # Open the target spreadsheet and update with filtered data
-    # binh_duong_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1A7hwKMN74dMCFUJ_QF1cGy41FdGAOQhga19l_I3O01Y/edit?gid=0#gid=0')
-    # if binh_duong_spreadsheet is None:
-    #     return
-
-    # binh_duong_sheet = binh_duong_spreadsheet.worksheet("Raw Productivity'")
-    # binh_duong_sheet.clear()
-    # binh_duong_sheet.update(
-    #     [binh_duong.columns.values.tolist()] + binh_duong.values.tolist(),
-    #     value_input_option='USER_ENTERED'
-    # )
 
     df_all_member_productivity['station_name'] = df_all_member_productivity['station_name'].apply(
     lambda x: 'BD A Mega SOC' if 'Binh Duong' in x and 'SOC' in x else x
     )
 
-    df_all_member_productivity['position'] = df_all_member_productivity['position'].apply(
-    lambda x: 'FTE Staff' if 'Staff' in x else ('Driver' if 'Driver' in x else ('Rider' if 'Rider' in x else x))
-    )
+    mapping = {
+        '3. Staff': 'FTE Staff',
+        '6. Driver': 'Driver',
+        '6. Driver (X-Metro)': 'Driver - X-metro',
+        '4. Rider': 'Rider',
+        '8. Part-time Rider': 'Rider Part-time',
+        '4. Rider Freelancer': 'Rider Freelancer',
+        '4. Rider SDD': 'Rider SDD',
+        '6. Driver (Van)': 'Driver - Van',
+        '6. Driver - 2T': 'Driver - 2T',
+        '6. Driver - 5T': 'Driver - 5T',
+        '6. Driver - 8T': 'Driver - 8T',
+        '6. Driver (Bulky)': 'Driver - Bulky',
+        '6. Driver - 1T25': 'Driver - 1T25'
+    }
+
+    df_all_member_productivity['position'] = df_all_member_productivity['position'].replace(mapping)
+
     
     df_all_member_productivity['area'] = df_all_member_productivity['area'].apply(
     lambda x: 'South' if x in ['SE', 'SW'] else ('HNI' if x == 'HN' else x)
@@ -211,32 +195,34 @@ def main():
         value_input_option='USER_ENTERED'
     )
 
-    # # File Nationwide Scheme Efficiency
+# File track SDD
 
-    # two_months_ago = pd.Timestamp.today().replace(day=1) - pd.DateOffset(months=2)
+    rider_sdd = df_all_member_productivity[
+        df_all_member_productivity['position'].str.contains("Rider SDD", na=False)
+    ]
 
-    # scheme_efficiency = df_all_member_productivity[df_all_member_productivity['date_update'] >= two_months_ago]
+    rider_sdd_hn = rider_sdd[(rider_sdd['team'] == 'Huyen Trang') | (rider_sdd['team'] == 'Thu Hien')]
 
-    # scheme_efficiency['position'] = scheme_efficiency['position'].apply(
-    #     lambda x: 'Rider' if 'Rider' in x else 'FTE Staff' if 'Staff' in x else 'Driver' if 'Driver' in x else None
-    # )
+    rider_sdd_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1sItVLyDOaGWx2eWzxdJBygRnwLmJ4h5RiKBDb6glnJI')
+    if rider_sdd_spreadsheet is None:
+        return
+    rider_sdd_sheet = rider_sdd_spreadsheet.worksheet("Data team")
+    rider_sdd_sheet.clear()
+    rider_sdd_sheet.update(
+        [rider_sdd.columns.values.tolist()] + rider_sdd.values.tolist(),
+        value_input_option='USER_ENTERED'
+    )
 
-    # for col in date_columns:
-    #     scheme_efficiency[col] = scheme_efficiency[col].dt.strftime('%Y-%m-%d')
-
-    # scheme_efficiency = scheme_efficiency.replace({np.nan: '', np.inf: '', -np.inf: ''})
-
-    # # Open the target spreadsheet and update with filtered data
-    # scheme_efficiency_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1ZghVwm_7cniD1CdFNwXz9gOjoggUqzxxznqT0hTDLk0/edit?gid=0#gid=0')
-    # if scheme_efficiency_spreadsheet is None:
-    #     return
-
-    # scheme_efficiency_sheet = scheme_efficiency_spreadsheet.worksheet("Raw Productivity")
-    # scheme_efficiency_sheet.clear()
-    # scheme_efficiency_sheet.update(
-    #     [scheme_efficiency.columns.values.tolist()] + scheme_efficiency.values.tolist(),
-    #     value_input_option='USER_ENTERED'
-    # )
+    rider_sdd_hn_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1N9jxx4FAniaL1OymksVrLCVWfHvtylqpOZjKUzzBIBw')
+    if rider_sdd_hn_spreadsheet is None:
+        return
+    rider_sdd_hn_sheet = rider_sdd_hn_spreadsheet.worksheet("Raw Productivity")
+    rider_sdd_hn_sheet.clear()
+    rider_sdd_hn_sheet.update(
+        [rider_sdd_hn.columns.values.tolist()] + rider_sdd_hn.values.tolist(),
+        value_input_option='USER_ENTERED'
+    )
+    
 
 if __name__ == "__main__":
     main()

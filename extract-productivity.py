@@ -174,17 +174,13 @@ def main():
         value_input_option='USER_ENTERED'
     )
 
-    # File SOC & LineHaul Nationwide (c Hoa + c Hân)
+    # File Linehaul project
 
     soc_linehaul = df_all_member_productivity[
-        (df_all_member_productivity['team'] == "Gia Han") |
-        (df_all_member_productivity['team'] == "Yen Phan") |
-        (df_all_member_productivity['team'] == "Cam Giang") |
-        (df_all_member_productivity['team'] == "Yen Nhi") |
         (df_all_member_productivity['position'].str.contains("Driver", na=False))
     ]
 
-    soc_linehaul_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1zHEWFEwyZ6zq88hUvQfEzqwipCnHpdaovIl8hXFhPPw')
+    soc_linehaul_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1y12mSMS03JCWRDkVojJWNt93R7E_p3poUa5xEGIUmgk')
     if soc_linehaul_spreadsheet is None:
         return
 
@@ -210,16 +206,6 @@ def main():
     rider_sdd_sheet.clear()
     rider_sdd_sheet.update(
         [rider_sdd.columns.values.tolist()] + rider_sdd.values.tolist(),
-        value_input_option='USER_ENTERED'
-    )
-
-    rider_sdd_hn_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1N9jxx4FAniaL1OymksVrLCVWfHvtylqpOZjKUzzBIBw')
-    if rider_sdd_hn_spreadsheet is None:
-        return
-    rider_sdd_hn_sheet = rider_sdd_hn_spreadsheet.worksheet("Raw Productivity")
-    rider_sdd_hn_sheet.clear()
-    rider_sdd_hn_sheet.update(
-        [rider_sdd_hn.columns.values.tolist()] + rider_sdd_hn.values.tolist(),
         value_input_option='USER_ENTERED'
     )
     

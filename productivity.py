@@ -1,3 +1,4 @@
+code này đã tối ưu chưa:
 import os
 import time
 import logging
@@ -8,7 +9,7 @@ from collections import deque
 import gspread
 import pandas as pd
 from google.oauth2.service_account import Credentials
-from requests.exceptions import JSONDecodeError, ConnectionError, Timeout
+from requests.exceptions import JSONDecodeError
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 
 # =========================
@@ -39,15 +40,10 @@ DATE_COLS = [
     "hm_interview_date", "offering_date", "accept_date", "onboard_date"
 ]
 
-DATE_FORMATS = [
-    "%y/%m/%d", "%Y/%m/%d", "%m/%d/%Y", "%m/%d/%y",
-    "%d-%b-%y", "%d-%b-%Y", "%Y-%m-%d"
-]
-
 # =========================
-# RATE LIMITER
+# TOKEN BUCKET RATE LIMITER
 # =========================
-READ_RATE_LIMIT = int(os.getenv("GSHEETS_READ_RPM", "55"))
+READ_RATE_LIMIT = int(os.getenv("GSHEETS_READ_RPM", "55"))   # 55 để có buffer
 WRITE_RATE_LIMIT = int(os.getenv("GSHEETS_WRITE_RPM", "55"))
 WINDOW = 60.0
 
@@ -59,13 +55,19 @@ def _acquire_token(tokens: deque, limit: int, kind: str):
     while True:
         with _lock:
             now = time.monotonic()
+            # remove expired
             while tokens and (now - tokens[0]) > WINDOW:
                 tokens.popleft()
             if len(tokens) < limit:
                 tokens.append(now)
                 return
-            wait_seconds = max(WINDOW - (now - tokens[0]) + 0.01, 0.1)
-        threading.Event().wait(wait_seconds)
+            # quota full, phải chờ
+            wait_seconds = WINDOW - (now - tokens[0]) + 0.1
+        if wait_seconds > 0:
+            logging.info(f"⏳ {kind} quota full ({len(tokens)}/{limit}). Sleeping {wait_seconds:.2f}s...")
+            time.sleep(wait_seconds)
+        else:
+            time.sleep(0.1)
 
 def rate_limit_read():
     _acquire_token(_read_tokens, READ_RATE_LIMIT, "READ")
@@ -109,35 +111,17 @@ def safe_get_all_records(worksheet):
     return worksheet.get_all_records()
 
 # =========================
-# DATE PARSING
+# READ SHEETS (retry)
 # =========================
-def try_parsing_date(text):
-    for fmt in DATE_FORMATS:
-        try:
-            return pd.to_datetime(text, format=fmt)
-        except (ValueError, TypeError):
-            continue
-    return pd.NaT
-
-def normalize_dates(df, date_cols):
-    for col in date_cols:
-        df[col] = pd.to_datetime(df[col], errors='coerce')
-        mask = df[col].isna()
-        if mask.any():
-            df.loc[mask, col] = df.loc[mask, col].apply(try_parsing_date)
-        df[col] = df[col].dt.strftime("%Y-%m-%d")
-    return df
-
-# =========================
-# READ SHEETS WITH RETRY
-# =========================
-@retry(wait=wait_exponential(multiplier=2, min=2, max=30),
-       stop=stop_after_attempt(5),
-       retry=retry_if_exception_type((gspread.exceptions.APIError, JSONDecodeError,
-                                      ConnectionError, Timeout)))
-def read_worksheet(sheet, sheet_name, schema):
-    ws = safe_worksheet(sheet, sheet_name)
-    data = safe_get_range(ws, "B8:AR")
+@retry(
+    wait=wait_exponential(multiplier=2, min=2, max=60),
+    stop=stop_after_attempt(5),
+    retry=retry_if_exception_type((gspread.exceptions.APIError, JSONDecodeError)),
+    reraise=False
+)
+def read_worksheet_with_retry(sheet, sheet_name, schema):
+    ws = safe_worksheet(sheet, sheet_name)   # READ
+    data = safe_get_range(ws, "B8:AR")       # READ
     if not data:
         return pd.DataFrame(columns=schema)
     df = pd.DataFrame(data)
@@ -146,14 +130,17 @@ def read_worksheet(sheet, sheet_name, schema):
     df["date_update"] = pd.to_datetime(df["date_update"], errors="coerce")
     return df[df["date_update"] >= pd.Timestamp("2025-01-01")]
 
-@retry(wait=wait_exponential(multiplier=2, min=2, max=30),
-       stop=stop_after_attempt(5),
-       retry=retry_if_exception_type((gspread.exceptions.APIError, JSONDecodeError,
-                                      ConnectionError, Timeout)))
 def get_sheet_data(client, url, sheet_name, schema):
-    sheet = client.open_by_url(url)
-    df = read_worksheet(sheet, sheet_name, schema)
-    return df
+    try:
+        sheet = client.open_by_url(url)
+        df = read_worksheet_with_retry(sheet, sheet_name, schema)
+        logging.info(f"✅ {sheet_name} từ {url}")
+        return df
+    except gspread.exceptions.WorksheetNotFound:
+        logging.error(f"❌ Không tìm thấy sheet {sheet_name} trong {url}")
+    except Exception as e:
+        logging.error(f"❌ Lỗi sheet {sheet_name} từ {url}: {e}")
+    return pd.DataFrame(columns=schema)
 
 # =========================
 # FETCH SONG SONG
@@ -161,47 +148,22 @@ def get_sheet_data(client, url, sheet_name, schema):
 def fetch_all_sheets(client, sheet_tasks, schema, max_workers=5):
     all_data = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(get_sheet_data, client, url, name, schema): (url, name)
-                   for url, name in sheet_tasks}
+        futures = {executor.submit(get_sheet_data, client, url, name, schema): (url, name) for url, name in sheet_tasks}
         for future in as_completed(futures):
             try:
                 all_data.append(future.result())
             except Exception as e:
                 url, name = futures[future]
-                logging.error(f"❌ Failed sheet {name} in {url}: {e}")
-                # append empty df để không bỏ sót index
-                all_data.append(pd.DataFrame(columns=schema))
+                logging.error(f"❌ Task fail {name} trong {url}: {e}")
     return pd.concat(all_data, ignore_index=True) if all_data else pd.DataFrame(columns=schema)
 
 # =========================
-# REMOVE DUPLICATES
+# CLEAN DATA
 # =========================
-def remove_duplicates(df):
-    df["ticket_id_numeric"] = pd.to_numeric(df["ticket_id"], errors="coerce").fillna(0)
-    df = df.sort_values("ticket_id_numeric", ascending=False)
-    df = df.drop_duplicates(subset=["source", "phone", "pic"], keep="first")
-    df = df.drop(columns=["ticket_id_numeric"])
+def normalize_dates(df, date_cols):
+    for col in date_cols:
+        df[col] = pd.to_datetime(df[col], errors="coerce").dt.strftime("%Y-%m-%d")
     return df
-
-# =========================
-# WRITE MASTER
-# =========================
-@retry(wait=wait_exponential(multiplier=2, min=2, max=30),
-       stop=stop_after_attempt(5),
-       retry=retry_if_exception_type((gspread.exceptions.APIError, JSONDecodeError,
-                                      ConnectionError, Timeout)))
-def write_master(ws, df):
-    values = [df.columns.tolist()] + df.values.tolist()
-    rate_limit_write()
-    ws.clear()
-    rate_limit_write()
-    ws.batch_update([
-        {"range": "A1:AO1", "values": [df.columns.tolist()]},
-        {"range": "A2:AO{}".format(len(df)+1), "values": df.values.tolist()},
-        {"range": "AR1:AS1", "values": [["channel_by_prod", "team"]]},
-        {"range": "AR2", "values": [["=ARRAYFORMULA(IFNA(XLOOKUP(D2:D,Source!$A:$A,Source!$C:$C)))"]]},
-        {"range": "AS2", "values": [["=ARRAYFORMULA(IFNA(XLOOKUP(AO2:AO,Info!$C:$C,Info!$N:$N)))"]]}
-    ])
 
 # =========================
 # MAIN
@@ -210,31 +172,44 @@ def main():
     client = GSpreadClientWithCache(authenticate_gspread())
 
     # đọc danh sách link
-    link_sheet = client.open_by_url(LINK_SPREADSHEET_URL)
-    ws_links = safe_worksheet(link_sheet, "Productivity File")
-    df_links = pd.DataFrame(safe_get_all_records(ws_links))
+    link_spreadsheet = client.open_by_url(LINK_SPREADSHEET_URL)   # READ
+    ws_links = safe_worksheet(link_spreadsheet, "Productivity File")  # READ
+    data_links = safe_get_all_records(ws_links)                        # READ
+    df_links = pd.DataFrame(data_links)
 
     if not all(c in df_links.columns for c in REQUIRED_COLS):
         raise Exception("Thiếu cột trong Productivity File")
 
     # tạo tasks
-    sheet_tasks = [(url, name) for url, names in zip(df_links["Link"], df_links[REQUIRED_COLS[1:]].values.tolist())
-                   if isinstance(url, str) and url.strip()
-                   for name in filter(None, names)]
-    logging.info(f"Total sheets to fetch: {len(sheet_tasks)}")
+    sheet_tasks = []
+    for url, names in zip(df_links["Link"], df_links[REQUIRED_COLS[1:]].values.tolist()):
+        if url and isinstance(url, str) and url.strip():
+            for name in filter(None, names):
+                sheet_tasks.append((url, name))
 
-    # fetch song song với retry từng sheet
-    all_data = fetch_all_sheets(client, sheet_tasks, SCHEMA, max_workers=5)
+    logging.info(f"🔄 Tổng cộng {len(sheet_tasks)} sheet")
+
+    # lấy data song song
+    all_data = fetch_all_sheets(client, sheet_tasks, SCHEMA, max_workers=3)
     all_data = normalize_dates(all_data, DATE_COLS)
+    all_data.replace([float("inf"), float("-inf")], "", inplace=True)
     all_data.fillna("", inplace=True)
 
-    # remove duplicates
-    all_data = remove_duplicates(all_data)
-
     # ghi vào Master
-    master_sheet = client.open_by_url(MASTER_SPREADSHEET_URL)
-    ws_master = safe_worksheet(master_sheet, "Productivity")
-    write_master(ws_master, all_data)
+    master_spreadsheet = client.open_by_url(MASTER_SPREADSHEET_URL)   # READ
+    ws_master = safe_worksheet(master_spreadsheet, "Productivity")    # READ
+
+    values = [all_data.columns.tolist()] + all_data.values.tolist()
+    rate_limit_write(); ws_master.clear()          # WRITE
+    rate_limit_write(); ws_master.update(values)   # WRITE
+
+    # thêm công thức
+    rate_limit_write()
+    ws_master.batch_update([
+        {"range": "AR1:AS1", "values": [["channel_by_prod", "team"]]}
+    ])
+    ws_master.update_acell("AR2", "=ARRAYFORMULA(IFNA(XLOOKUP(D2:D,Source!$A:$A,Source!$C:$C)))")
+    ws_master.update_acell("AS2", "=ARRAYFORMULA(IFNA(XLOOKUP(AO2:AO,Info!$C:$C,Info!$N:$N)))")
 
     logging.info("✅ DONE")
 

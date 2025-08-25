@@ -4,17 +4,29 @@ from google.oauth2.service_account import Credentials
 import pandas as pd
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from requests.exceptions import JSONDecodeError
-from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
+from tenacity import retry, wait_exponential_jitter, stop_after_attempt, retry_if_exception_type
 
-# Cấu hình logging
-logging.basicConfig(level=logging.INFO)
+# ========================== CONFIG ==========================
+MAX_WORKERS = 15  # số luồng đọc song song
+API_SLEEP_THRESHOLD = 70  # nghỉ khi gần quota
+LOG_FILE = "log_process.log"
 
+# ========================== LOGGING ==========================
+logging.basicConfig(
+    filename=LOG_FILE,
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+
+# ========================== AUTH ==========================
 def authenticate_gspread():
     scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     creds = Credentials.from_service_account_file('credentials.json', scopes=scopes)
     return gspread.authorize(creds)
 
+# ========================== CACHED CLIENT ==========================
 class GSpreadClientWithCache:
     def __init__(self, client):
         self.client = client
@@ -25,77 +37,87 @@ class GSpreadClientWithCache:
             try:
                 self.cache[url] = self.client.open_by_url(url)
             except gspread.exceptions.APIError as e:
-                logging.error(f"Không thể mở bảng. Lỗi: {e}")
+                logging.error(f"Không thể mở bảng: {url}. Lỗi: {e}")
                 self.cache[url] = None
         return self.cache[url]
 
+# ========================== RETRY WRAPPER ==========================
 @retry(
-    wait=wait_exponential(multiplier=2, min=4, max=60),
+    wait=wait_exponential_jitter(multiplier=2, max=60),
     stop=stop_after_attempt(5),
     retry=retry_if_exception_type((gspread.exceptions.APIError, JSONDecodeError)),
     reraise=True
 )
-def read_worksheet_with_retry(sheet, sheet_name, schema):
-    worksheet = sheet.worksheet(sheet_name)
-    data = worksheet.get('B8:AR') 
-    if not data:
+def read_sheet_with_retry(sheet, sheet_name, schema):
+    ws = sheet.worksheet(sheet_name)
+    data = ws.get_all_values()
+    if len(data) < 8:
         return pd.DataFrame(columns=schema)
-    df = pd.DataFrame(data)
+
+    df = pd.DataFrame(data[7:])
     df.columns = schema[:len(df.columns)]
     df = df.reindex(columns=schema)
     df = df.fillna('')
-    df['date_update'] = df['date_update'].apply(try_parsing_date)
+    df['date_update'] = df['date_update'].apply(try_parse_date)
     df = df[df['date_update'] >= pd.Timestamp("2025-01-01")]
     return df
 
-def get_sheet_data(client, url, sheet_name, schema):
-    sheet = client.open_by_url(url)
+def try_parse_date(text):
+    if not text:
+        return pd.NaT
+    for fmt in ('%Y-%m-%d', '%y/%m/%d', '%Y/%m/%d', '%m/%d/%Y', '%d-%b-%y', '%d-%b-%Y'):
+        try:
+            return pd.to_datetime(text, format=fmt)
+        except ValueError:
+            continue
+    return pd.NaT
+
+# ========================== GET DATA ==========================
+def get_sheet_data(client_cache, url, sheet_name, schema):
+    sheet = client_cache.open_by_url(url)
     if sheet is None:
         return pd.DataFrame(columns=schema)
 
     try:
-        df = read_worksheet_with_retry(sheet, sheet_name, schema)
-        return df
+        return read_sheet_with_retry(sheet, sheet_name, schema)
     except gspread.exceptions.WorksheetNotFound:
-        logging.error(f"Không tìm thấy sheet với tên {sheet_name}")
+        logging.error(f"Không tìm thấy sheet '{sheet_name}' trong {url}")
     except Exception as e:
-        logging.error(f"Lỗi khi đọc sheet '{sheet_name}': {e}")
-
+        logging.error(f"Lỗi đọc sheet '{sheet_name}' trong {url}: {e}")
     return pd.DataFrame(columns=schema)
 
-def try_parsing_date(text):
-    for fmt in ('%y/%m/%d', '%Y/%m/%d', '%m/%d/%Y', '%m/%d/%y', '%d-%b-%y', '%d-%b-%Y', '%Y-%m-%d'):
-        try:
-            return pd.to_datetime(text, format=fmt)
-        except ValueError:
-            pass
-    return pd.NaT
+# ========================== CLEAN DATA ==========================
+def clean_and_deduplicate(df):
+    if df.empty:
+        return df
+    if all(col in df.columns for col in ['source', 'phone', 'pic', 'ticket_id']):
+        df['ticket_id'] = pd.to_numeric(df['ticket_id'], errors='coerce').fillna(0)
+        df.sort_values(by=['source', 'phone', 'pic', 'ticket_id'],
+                       ascending=[True, True, True, False], inplace=True)
+        df = df.drop_duplicates(subset=['source', 'phone', 'pic'], keep='first')
 
+    date_cols = ["date_update", "date_cdd_applied", "recruiter_call_date",
+                 "hm_interview_date", "offering_date", "accept_date", "onboard_date"]
+    for col in date_cols:
+        if col in df.columns:
+            df[col] = df[col].apply(try_parse_date).dt.strftime('%Y-%m-%d')
+
+    df.replace([float('inf'), float('-inf')], '', inplace=True)
+    df.fillna('', inplace=True)
+    return df
+
+# ========================== MAIN ==========================
 def main():
-    client = GSpreadClientWithCache(authenticate_gspread())
+    start_time = time.time()
+    client_cache = GSpreadClientWithCache(authenticate_gspread())
 
-    # Mở bảng danh sách links
-    link_spreadsheet = client.open_by_url('https://docs.google.com/spreadsheets/d/10eMZVnmtyyr5JAzDvpE5Brgh-8fw3lEKmGvL5m6eCUY')
-    if link_spreadsheet is None:
-        raise Exception("Không thể mở bảng chứa danh sách các link. Kiểm tra quyền truy cập và URL.")
-
+    # Lấy danh sách link
+    link_spreadsheet = client_cache.open_by_url('https://docs.google.com/spreadsheets/d/10eMZVnmtyyr5JAzDvpE5Brgh-8fw3lEKmGvL5m6eCUY')
     link_sheet = link_spreadsheet.worksheet("Productivity File")
-    data = link_sheet.get_all_records()
-    df_links = pd.DataFrame(data)
-
-    required_cols = ['Link', 'Sheet 1', 'Sheet 2', 'Sheet 3', 'Sheet 4', 'Sheet 5']
-    if not all(col in df_links.columns for col in required_cols):
-        raise Exception("Thiếu cột trong Productivity File. Kiểm tra lại.")
-
+    df_links = pd.DataFrame(link_sheet.get_all_records())
     sheet_urls = df_links['Link'].tolist()
     sheet_names = df_links[['Sheet 1', 'Sheet 2', 'Sheet 3', 'Sheet 4', 'Sheet 5']].values.tolist()
 
-    # Mở bảng tổng
-    master_spreadsheet = client.open_by_url('https://docs.google.com/spreadsheets/d/1VlXicEr1FGrpdDcRpuv1aE2TAG-7QHEfWKNtFJF4nc8')
-    if master_spreadsheet is None:
-        raise Exception("Không thể mở bảng tổng. Kiểm tra quyền truy cập và URL.")
-
-    master_sheet = master_spreadsheet.worksheet("Productivity")
     schema = [
         "date_update", "date_cdd_applied", "fullname", "source", "dob", "phone", "area", 
         "address", "registration_area", "previous_work", "id_code", "note", "email", "rehire", 
@@ -107,56 +129,34 @@ def main():
         "fullname_ob", "phone_ob", "id_code_ob", "pic", "ticket_id", "rider_id"
     ]
 
-    all_data = pd.DataFrame(columns=schema)
-    api_call_count = 0
+    all_data = []
 
-    for url, names in zip(sheet_urls, sheet_names):
-        if not url or not isinstance(url, str) or not url.strip():
-            logging.warning("Bỏ qua một dòng vì không có URL hợp lệ.")
-            continue  # Bỏ qua nếu URL trống
-            
-        for name in names:
-            if name:
-                logging.info(f"Đang xử lý sheet '{name}'")
-                sheet_data = get_sheet_data(client, url, name, schema)
-                all_data = pd.concat([all_data, sheet_data], ignore_index=True)
-                api_call_count += 1
-                
-                if api_call_count % 15 == 0:
-                    logging.info("Đã gọi API 15 lần, chờ 1 phút trước khi tiếp tục...")
-                    time.sleep(70)
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = []
+        for url, names in zip(sheet_urls, sheet_names):
+            if not url.strip():
+                continue
+            for name in filter(None, names):
+                futures.append(executor.submit(get_sheet_data, client_cache, url, name, schema))
 
-    # Xử lý ngày tháng
+        for i, future in enumerate(as_completed(futures), 1):
+            result = future.result()
+            all_data.append(result)
+            if i % API_SLEEP_THRESHOLD == 0:
+                logging.info("Tạm nghỉ 70s để tránh quota limit...")
+                time.sleep(70)
 
-    # ==== BƯỚC LỌC TRÙNG THEO source, phone, pic VÀ GIỮ ticket_id LỚN NHẤT ====
-    if all(col in all_data.columns for col in ['source', 'phone', 'pic', 'ticket_id']):
-        # Chuyển ticket_id sang số (nếu là dạng chuỗi)
-        all_data['ticket_id'] = pd.to_numeric(all_data['ticket_id'], errors='coerce').fillna(0)
-        
-        # Sắp xếp theo 3 cột và ticket_id giảm dần để ưu tiên bản có ticket_id lớn hơn
-        all_data.sort_values(by=['source', 'phone', 'pic', 'ticket_id'], ascending=[True, True, True, False], inplace=True)
-        
-        # Drop duplicates giữ lại bản đầu tiên (ticket_id lớn nhất trong nhóm)
-        all_data = all_data.drop_duplicates(subset=['source', 'phone', 'pic'], keep='first')
+    all_data = pd.concat(all_data, ignore_index=True)
+    all_data = clean_and_deduplicate(all_data)
 
-    for col in ["date_update", "date_cdd_applied", "recruiter_call_date", "hm_interview_date", "offering_date", "accept_date", "onboard_date"]:
-        all_data[col] = all_data[col].apply(try_parsing_date).dt.strftime('%Y-%m-%d')
-
-    all_data.replace([float('inf'), float('-inf')], '', inplace=True)
-    all_data.fillna('', inplace=True)
-
-    # Ghi dữ liệu vào master
+    # Ghi về Master
+    master_spreadsheet = client_cache.open_by_url('https://docs.google.com/spreadsheets/d/1VlXicEr1FGrpdDcRpuv1aE2TAG-7QHEfWKNtFJF4nc8')
+    master_sheet = master_spreadsheet.worksheet("Productivity")
     master_sheet.clear()
     master_sheet.update([all_data.columns.values.tolist()] + all_data.values.tolist())
-    master_sheet.batch_update([{
-        'range': 'AR1:AS1',
-        'values': [['channel_by_prod', 'team']]
-    }])
-    master_sheet.update_cell(2, 44, '=ARRAYFORMULA(ifna(XLOOKUP(D2:D,Source!$A:$A,Source!$C:$C)))')
-    master_sheet.update_cell(2, 45, '=ARRAYFORMULA(ifna(XLOOKUP(AO2:AO,Info!$C:$C,Info!$N:$N)))')
 
-    logging.info("Dữ liệu đã được tổng hợp thành công vào Master Spreadsheet!")
+    elapsed = time.time() - start_time
+    logging.info(f"Hoàn thành! Tổng thời gian: {elapsed:.2f} giây.")
 
 if __name__ == "__main__":
     main()
-

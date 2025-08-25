@@ -49,19 +49,20 @@ lock = threading.Lock()
 
 def rate_limiter():
     global tokens
-    with lock:
-        now = time.time()
-        # loại token cũ ngoài cửa sổ 60s
-        while tokens and now - tokens[0] > WINDOW:
-            tokens.popleft()
+    while True:
+        with lock:
+            now = time.time()
+            # loại token cũ ngoài cửa sổ 60s
+            while tokens and now - tokens[0] > WINDOW:
+                tokens.popleft()
 
-        if len(tokens) >= RATE_LIMIT:
+            if len(tokens) < RATE_LIMIT:
+                tokens.append(now)
+                return  # đủ quota thì cho qua
+
             sleep_time = WINDOW - (now - tokens[0]) + 0.1
-            logging.info(f"⏳ Hết quota, chờ {sleep_time:.1f}s...")
-            time.sleep(sleep_time)
-            return rate_limiter()
-
-        tokens.append(now)
+        logging.info(f"⏳ Hết quota, chờ {sleep_time:.1f}s...")
+        time.sleep(sleep_time)
 
 # =========================
 # AUTH
@@ -91,7 +92,7 @@ class GSpreadClientWithCache:
     wait=wait_exponential(multiplier=2, min=2, max=60),
     stop=stop_after_attempt(5),
     retry=retry_if_exception_type((gspread.exceptions.APIError, JSONDecodeError)),
-    reraise=True
+    reraise=False   # ❌ đổi từ True -> False để không crash khi retry hết số lần
 )
 def read_worksheet_with_retry(sheet, sheet_name, schema):
     rate_limiter()

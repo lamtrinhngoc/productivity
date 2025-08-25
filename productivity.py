@@ -6,7 +6,7 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from requests.exceptions import JSONDecodeError
-from tenacity import retry, wait_exponential_jitter, stop_after_attempt, retry_if_exception_type
+from tenacity import wait_exponential, wait_random, wait_chain
 
 # ========================== CONFIG ==========================
 MAX_WORKERS = 15  # số luồng đọc song song
@@ -43,7 +43,9 @@ class GSpreadClientWithCache:
 
 # ========================== RETRY WRAPPER ==========================
 @retry(
-    wait=wait_exponential_jitter(multiplier=2, max=60),
+    wait=wait_chain(
+        wait_exponential(multiplier=1, min=1, max=60) + wait_random(0, 1)
+    )
     stop=stop_after_attempt(5),
     retry=retry_if_exception_type((gspread.exceptions.APIError, JSONDecodeError)),
     reraise=True
@@ -160,3 +162,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

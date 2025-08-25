@@ -38,8 +38,8 @@ DATE_COLS = [
     "hm_interview_date", "offering_date", "accept_date", "onboard_date"
 ]
 
-RATE_LIMIT = 60   # tối đa 60 requests/phút
-WINDOW = 60       # cửa sổ 60 giây
+RATE_LIMIT = 50   # giảm xuống 50 requests/phút để an toàn
+WINDOW = 60
 api_call_times = []
 api_lock = threading.Lock()
 
@@ -47,7 +47,7 @@ api_lock = threading.Lock()
 # RATE LIMITER
 # =========================
 def rate_limiter():
-    """Đảm bảo không vượt quá quota 60 requests/phút"""
+    """Đảm bảo không vượt quá quota 50 requests/phút"""
     global api_call_times
     with api_lock:
         now = time.time()
@@ -55,7 +55,7 @@ def rate_limiter():
 
         if len(api_call_times) >= RATE_LIMIT:
             sleep_time = WINDOW - (now - api_call_times[0]) + 1
-            logging.warning(f"Quota gần đầy ({len(api_call_times)}/60). Đang chờ {sleep_time:.1f}s...")
+            logging.warning(f"⏳ Quota gần đầy ({len(api_call_times)}/{RATE_LIMIT}). Đang chờ {sleep_time:.1f}s...")
             time.sleep(sleep_time)
             now = time.time()
             api_call_times = [t for t in api_call_times if now - t < WINDOW]
@@ -63,11 +63,22 @@ def rate_limiter():
         api_call_times.append(now)
 
 # =========================
-# GSPREAD CLIENT
+# GSPREAD CLIENT + CACHE
 # =========================
 def authenticate_gspread():
     creds = Credentials.from_service_account_file("credentials.json", scopes=SCOPES)
     return gspread.authorize(creds)
+
+class GSpreadClientWithCache:
+    def __init__(self, client):
+        self.client = client
+        self.cache = {}
+
+    def open_by_url(self, url):
+        if url not in self.cache:
+            rate_limiter()
+            self.cache[url] = self.client.open_by_url(url)
+        return self.cache[url]
 
 # =========================
 # ĐỌC DỮ LIỆU SHEET
@@ -93,7 +104,6 @@ def read_worksheet_with_retry(sheet, sheet_name, schema):
 
 def get_sheet_data(client, url, sheet_name, schema):
     try:
-        rate_limiter()
         sheet = client.open_by_url(url)
         df = read_worksheet_with_retry(sheet, sheet_name, schema)
         logging.info(f"✅ Hoàn thành sheet '{sheet_name}' trong {url}")
@@ -107,11 +117,11 @@ def get_sheet_data(client, url, sheet_name, schema):
 # =========================
 # CHẠY SONG SONG
 # =========================
-def fetch_all_sheets(client, sheet_tasks, schema, max_workers=8):
+def fetch_all_sheets(client, sheet_tasks, schema, max_workers=4):
+    """max_workers=4 để giảm burst API call"""
     all_data = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(get_sheet_data, client, url, name, schema): (url, name) for url, name in sheet_tasks}
-
         for future in as_completed(futures):
             url, name = futures[future]
             try:
@@ -133,7 +143,7 @@ def normalize_dates(df, date_cols):
 # MAIN
 # =========================
 def main():
-    client = authenticate_gspread()
+    client = GSpreadClientWithCache(authenticate_gspread())
 
     # --- Mở bảng links
     link_spreadsheet = client.open_by_url(LINK_SPREADSHEET_URL)
@@ -154,28 +164,25 @@ def main():
 
     # --- Chạy song song để lấy dữ liệu
     logging.info(f"🔄 Bắt đầu fetch {len(sheet_tasks)} sheet song song...")
-    all_data = fetch_all_sheets(client, sheet_tasks, SCHEMA, max_workers=8)
+    all_data = fetch_all_sheets(client, sheet_tasks, SCHEMA, max_workers=4)
 
     # Chuẩn hóa ngày tháng
     all_data = normalize_dates(all_data, DATE_COLS)
     all_data.replace([float("inf"), float("-inf")], "", inplace=True)
     all_data.fillna("", inplace=True)
 
-    # --- Mở bảng Master
+    # --- Ghi dữ liệu vào master
     master_spreadsheet = client.open_by_url(MASTER_SPREADSHEET_URL)
     master_sheet = master_spreadsheet.worksheet("Test")
 
-    # --- Ghi dữ liệu vào master
     values = [all_data.columns.tolist()] + all_data.values.tolist()
-    batch_ops = [
+
+    master_sheet.batch_update([
         {"range": "A1", "values": values},
         {"range": "AR1:AS1", "values": [["channel_by_prod", "team"]]},
         {"range": "AR2", "values": [["=ARRAYFORMULA(ifna(XLOOKUP(D2:D,Source!$A:$A,Source!$C:$C)))"]]},
         {"range": "AS2", "values": [["=ARRAYFORMULA(ifna(XLOOKUP(AO2:AO,Info!$C:$C,Info!$N:$N)))"]]},
-    ]
-
-    master_sheet.clear()
-    master_sheet.batch_update(batch_ops)
+    ])
 
     logging.info("✅ Dữ liệu đã được tổng hợp thành công vào Master Spreadsheet!")
 

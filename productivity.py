@@ -9,8 +9,10 @@ from requests.exceptions import JSONDecodeError
 from tenacity import retry, wait_exponential, wait_random, wait_chain, stop_after_attempt, retry_if_exception_type
 
 # ========================== CONFIG ==========================
-MAX_WORKERS = 5  # số luồng đọc song song
-API_SLEEP_THRESHOLD = 60  # nghỉ khi gần quota
+MAX_WORKERS = 3            # Giảm luồng song song để tránh vượt quota
+REQUEST_INTERVAL = 0.5     # Nghỉ giữa mỗi request
+BATCH_LIMIT = 50           # Sau mỗi 50 request sẽ nghỉ lâu hơn
+BATCH_SLEEP = 30           # Nghỉ 30s sau mỗi batch
 LOG_FILE = "log_process.log"
 
 # ========================== LOGGING ==========================
@@ -55,9 +57,7 @@ def try_parse_date(text):
 
 # ========================== RETRY WRAPPER ==========================
 @retry(
-    wait=wait_chain(
-        wait_exponential(multiplier=1, min=1, max=60) + wait_random(0, 1)
-    ),
+    wait=wait_chain(wait_exponential(multiplier=1, min=1, max=60) + wait_random(0, 1)),
     stop=stop_after_attempt(5),
     retry=retry_if_exception_type((gspread.exceptions.APIError, JSONDecodeError)),
     reraise=True
@@ -144,6 +144,7 @@ def main():
     ]
 
     all_data = []
+    request_count = 0
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = []
@@ -157,10 +158,13 @@ def main():
         for i, future in enumerate(as_completed(futures), 1):
             result = future.result()
             all_data.append(result)
-            logging.info(f"Đã xử lý xong {i}/{len(futures)} sheet")
-            if i % API_SLEEP_THRESHOLD == 0:
-                logging.info("Tạm nghỉ 70s để tránh quota limit...")
-                time.sleep(70)
+            request_count += 1
+            logging.info(f"Đã xử lý xong {i}/{len(futures)} sheet (Request #{request_count})")
+
+            time.sleep(REQUEST_INTERVAL)
+            if request_count % BATCH_LIMIT == 0:
+                logging.info(f"Đã xử lý {request_count} request, nghỉ {BATCH_SLEEP}s tránh quota...")
+                time.sleep(BATCH_SLEEP)
 
     all_data = pd.concat(all_data, ignore_index=True)
     all_data = clean_and_deduplicate(all_data)

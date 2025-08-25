@@ -154,7 +154,7 @@ def main():
 
     # Ghi về Master
     master_spreadsheet = client_cache.open_by_url('https://docs.google.com/spreadsheets/d/1VlXicEr1FGrpdDcRpuv1aE2TAG-7QHEfWKNtFJF4nc8')
-    master_sheet = master_spreadsheet.worksheet("Productivity")
+    master_sheet = master_spreadsheet.worksheet("Test")
     master_sheet.clear()
     master_sheet.update([all_data.columns.values.tolist()] + all_data.values.tolist())
 
@@ -163,6 +163,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 

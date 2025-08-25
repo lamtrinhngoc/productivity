@@ -6,7 +6,8 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from requests.exceptions import JSONDecodeError
-from tenacity import wait_exponential, wait_random, wait_chain
+from tenacity import retry, wait_exponential, wait_random, wait_chain, stop_after_attempt, retry_if_exception_type
+
 
 # ========================== CONFIG ==========================
 MAX_WORKERS = 15  # số luồng đọc song song
@@ -162,5 +163,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 

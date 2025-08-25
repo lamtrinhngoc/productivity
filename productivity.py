@@ -38,16 +38,16 @@ DATE_COLS = [
     "hm_interview_date", "offering_date", "accept_date", "onboard_date"
 ]
 
-RATE_LIMIT = 50   # giảm xuống 50 requests/phút để an toàn
+# =========================
+# RATE LIMITER (tối đa 50 requests/phút để an toàn)
+# =========================
+RATE_LIMIT = 50
 WINDOW = 60
 api_call_times = []
 api_lock = threading.Lock()
 
-# =========================
-# RATE LIMITER
-# =========================
 def rate_limiter():
-    """Đảm bảo không vượt quá quota 50 requests/phút"""
+    """Đảm bảo không vượt quá quota Google Sheets"""
     global api_call_times
     with api_lock:
         now = time.time()
@@ -55,7 +55,7 @@ def rate_limiter():
 
         if len(api_call_times) >= RATE_LIMIT:
             sleep_time = WINDOW - (now - api_call_times[0]) + 1
-            logging.warning(f"⏳ Quota gần đầy ({len(api_call_times)}/{RATE_LIMIT}). Đang chờ {sleep_time:.1f}s...")
+            logging.warning(f"Quota gần đầy ({len(api_call_times)}/60). Đang chờ {sleep_time:.1f}s...")
             time.sleep(sleep_time)
             now = time.time()
             api_call_times = [t for t in api_call_times if now - t < WINDOW]
@@ -63,22 +63,25 @@ def rate_limiter():
         api_call_times.append(now)
 
 # =========================
-# GSPREAD CLIENT + CACHE
+# GSPREAD CLIENT
 # =========================
 def authenticate_gspread():
     creds = Credentials.from_service_account_file("credentials.json", scopes=SCOPES)
     return gspread.authorize(creds)
 
 class GSpreadClientWithCache:
+    """Cache để tránh gọi open_by_url nhiều lần"""
     def __init__(self, client):
         self.client = client
         self.cache = {}
+        self.lock = threading.Lock()
 
     def open_by_url(self, url):
-        if url not in self.cache:
-            rate_limiter()
-            self.cache[url] = self.client.open_by_url(url)
-        return self.cache[url]
+        with self.lock:
+            if url not in self.cache:
+                rate_limiter()
+                self.cache[url] = self.client.open_by_url(url)
+            return self.cache[url]
 
 # =========================
 # ĐỌC DỮ LIỆU SHEET
@@ -115,20 +118,27 @@ def get_sheet_data(client, url, sheet_name, schema):
     return pd.DataFrame(columns=schema)
 
 # =========================
-# CHẠY SONG SONG
+# CHẠY SONG SONG THEO NHÓM (batch)
 # =========================
-def fetch_all_sheets(client, sheet_tasks, schema, max_workers=4):
-    """max_workers=4 để giảm burst API call"""
+def fetch_all_sheets(client, sheet_tasks, schema, max_workers=3, batch_size=10):
     all_data = []
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(get_sheet_data, client, url, name, schema): (url, name) for url, name in sheet_tasks}
-        for future in as_completed(futures):
-            url, name = futures[future]
-            try:
-                df = future.result()
-                all_data.append(df)
-            except Exception as e:
-                logging.error(f"❌ Task thất bại {name} trong {url}: {e}")
+    for i in range(0, len(sheet_tasks), batch_size):
+        batch = sheet_tasks[i:i+batch_size]
+        logging.info(f"🔄 Đang xử lý batch {i//batch_size+1}/{(len(sheet_tasks)-1)//batch_size+1} ({len(batch)} sheets)")
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(get_sheet_data, client, url, name, schema): (url, name) for url, name in batch}
+            for future in as_completed(futures):
+                try:
+                    all_data.append(future.result())
+                except Exception as e:
+                    url, name = futures[future]
+                    logging.error(f"❌ Task thất bại {name} trong {url}: {e}")
+
+        # nghỉ giữa các batch để tránh quota
+        if i + batch_size < len(sheet_tasks):
+            logging.info("⏳ Nghỉ 70s để tránh quota...")
+            time.sleep(70)
+
     return pd.concat(all_data, ignore_index=True) if all_data else pd.DataFrame(columns=schema)
 
 # =========================
@@ -163,22 +173,25 @@ def main():
                 sheet_tasks.append((url, name))
 
     # --- Chạy song song để lấy dữ liệu
-    logging.info(f"🔄 Bắt đầu fetch {len(sheet_tasks)} sheet song song...")
-    all_data = fetch_all_sheets(client, sheet_tasks, SCHEMA, max_workers=4)
+    logging.info(f"🔄 Tổng cộng {len(sheet_tasks)} sheet cần xử lý...")
+    all_data = fetch_all_sheets(client, sheet_tasks, SCHEMA, max_workers=3, batch_size=10)
 
     # Chuẩn hóa ngày tháng
     all_data = normalize_dates(all_data, DATE_COLS)
     all_data.replace([float("inf"), float("-inf")], "", inplace=True)
     all_data.fillna("", inplace=True)
 
-    # --- Ghi dữ liệu vào master
+    # --- Mở bảng Master
     master_spreadsheet = client.open_by_url(MASTER_SPREADSHEET_URL)
     master_sheet = master_spreadsheet.worksheet("Test")
 
+    # --- Ghi dữ liệu vào master
     values = [all_data.columns.tolist()] + all_data.values.tolist()
+    master_sheet.clear()
+    master_sheet.update(values)
 
+    # Thêm công thức
     master_sheet.batch_update([
-        {"range": "A1", "values": values},
         {"range": "AR1:AS1", "values": [["channel_by_prod", "team"]]},
         {"range": "AR2", "values": [["=ARRAYFORMULA(ifna(XLOOKUP(D2:D,Source!$A:$A,Source!$C:$C)))"]]},
         {"range": "AS2", "values": [["=ARRAYFORMULA(ifna(XLOOKUP(AO2:AO,Info!$C:$C,Info!$N:$N)))"]]},

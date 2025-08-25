@@ -1,4 +1,3 @@
-Hãy giúp tôi tối ưu code này:
 import os
 import gspread
 from google.oauth2.service_account import Credentials
@@ -148,3 +147,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

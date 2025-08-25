@@ -3,13 +3,13 @@ import time
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import deque
 
 import gspread
 import pandas as pd
 from google.oauth2.service_account import Credentials
 from requests.exceptions import JSONDecodeError
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
-from collections import deque
 
 # =========================
 # CONFIG
@@ -40,64 +40,92 @@ DATE_COLS = [
 ]
 
 # =========================
-# TOKEN BUCKET RATE LIMITER (60 requests / phút)
+# TOKEN BUCKET RATE LIMITER (separate READ / WRITE)
 # =========================
-RATE_LIMIT = 60
-WINDOW = 60
-tokens = deque()
-lock = threading.Lock()
+READ_RATE_LIMIT = int(os.getenv("GSHEETS_READ_RPM", "59"))   # 59 để có buffer nhỏ
+WRITE_RATE_LIMIT = int(os.getenv("GSHEETS_WRITE_RPM", "60"))
+WINDOW = 60.0
 
-def rate_limiter():
-    global tokens
+_read_tokens = deque()
+_write_tokens = deque()
+_lock = threading.Lock()
+
+def _acquire_token(tokens: deque, limit: int, kind: str):
+    """Token bucket with monotonic clock, non-recursive."""
     while True:
-        with lock:
-            now = time.time()
-            # loại token cũ ngoài cửa sổ 60s
-            while tokens and now - tokens[0] > WINDOW:
+        with _lock:
+            now = time.monotonic()
+            # Remove expired tokens
+            while tokens and (now - tokens[0]) > WINDOW:
                 tokens.popleft()
 
-            if len(tokens) < RATE_LIMIT:
+            if len(tokens) < limit:
                 tokens.append(now)
-                return  # đủ quota thì cho qua
+                return  # allowed
 
-            sleep_time = WINDOW - (now - tokens[0]) + 0.1
-        logging.info(f"⏳ Hết quota, chờ {sleep_time:.1f}s...")
-        time.sleep(sleep_time)
+            # Need to wait until the oldest token expires
+            wait_seconds = WINDOW - (now - tokens[0]) + 0.01
+        if wait_seconds > 0:
+            logging.info(f"⏳ {kind} quota full ({len(tokens)}/{limit}). Sleeping {wait_seconds:.2f}s...")
+            time.sleep(wait_seconds)
+        else:
+            # edge case guard
+            time.sleep(0.01)
+
+def rate_limit_read():
+    _acquire_token(_read_tokens, READ_RATE_LIMIT, "READ")
+
+def rate_limit_write():
+    _acquire_token(_write_tokens, WRITE_RATE_LIMIT, "WRITE")
 
 # =========================
-# AUTH
+# AUTH + CLIENT CACHE
 # =========================
 def authenticate_gspread():
     creds = Credentials.from_service_account_file("credentials.json", scopes=SCOPES)
     return gspread.authorize(creds)
 
 class GSpreadClientWithCache:
-    """Cache open_by_url để không tốn request"""
+    """Cache Spreadsheet objects, và bọc tất cả lệnh đọc bằng limiter."""
     def __init__(self, client):
         self.client = client
-        self.cache = {}
-        self.lock = threading.Lock()
+        self._ss_cache = {}
+        self._lock = threading.Lock()
 
     def open_by_url(self, url):
-        with self.lock:
-            if url not in self.cache:
-                rate_limiter()
-                self.cache[url] = self.client.open_by_url(url)
-            return self.cache[url]
+        with self._lock:
+            if url not in self._ss_cache:
+                rate_limit_read()  # READ
+                self._ss_cache[url] = self.client.open_by_url(url)
+            return self._ss_cache[url]
 
 # =========================
-# READ SHEETS
+# SAFE WRAPPERS CHO CÁC LỆNH GSPREAD (đếm đúng từng READ)
+# =========================
+def safe_worksheet(spreadsheet, name: str):
+    rate_limit_read()  # READ
+    return spreadsheet.worksheet(name)
+
+def safe_get_range(worksheet, rng: str):
+    rate_limit_read()  # READ
+    return worksheet.get(rng)
+
+def safe_get_all_records(worksheet):
+    rate_limit_read()  # READ
+    return worksheet.get_all_records()
+
+# =========================
+# READ SHEETS (với retry)
 # =========================
 @retry(
     wait=wait_exponential(multiplier=2, min=2, max=60),
     stop=stop_after_attempt(5),
     retry=retry_if_exception_type((gspread.exceptions.APIError, JSONDecodeError)),
-    reraise=False   # ❌ đổi từ True -> False để không crash khi retry hết số lần
+    reraise=False  # sau 5 lần vẫn lỗi, return rỗng để job không chết
 )
 def read_worksheet_with_retry(sheet, sheet_name, schema):
-    rate_limiter()
-    ws = sheet.worksheet(sheet_name)
-    data = ws.get("B8:AR")
+    ws = safe_worksheet(sheet, sheet_name)        # READ
+    data = safe_get_range(ws, "B8:AR")            # READ
     if not data:
         return pd.DataFrame(columns=schema)
     df = pd.DataFrame(data)
@@ -108,7 +136,7 @@ def read_worksheet_with_retry(sheet, sheet_name, schema):
 
 def get_sheet_data(client, url, sheet_name, schema):
     try:
-        sheet = client.open_by_url(url)
+        sheet = client.open_by_url(url)                       # READ (cached lần 1)
         df = read_worksheet_with_retry(sheet, sheet_name, schema)
         logging.info(f"✅ {sheet_name} từ {url}")
         return df
@@ -147,13 +175,16 @@ def normalize_dates(df, date_cols):
 def main():
     client = GSpreadClientWithCache(authenticate_gspread())
 
-    # đọc link sheet
-    link_spreadsheet = client.open_by_url(LINK_SPREADSHEET_URL)
-    df_links = pd.DataFrame(link_spreadsheet.worksheet("Productivity File").get_all_records())
+    # Đọc file danh sách link
+    link_spreadsheet = client.open_by_url(LINK_SPREADSHEET_URL)   # READ (cached)
+    ws_links = safe_worksheet(link_spreadsheet, "Productivity File")  # READ
+    data_links = safe_get_all_records(ws_links)                       # READ
+    df_links = pd.DataFrame(data_links)
 
     if not all(c in df_links.columns for c in REQUIRED_COLS):
         raise Exception("Thiếu cột trong Productivity File")
 
+    # Tạo task theo từng sheet
     sheet_tasks = []
     for url, names in zip(df_links["Link"], df_links[REQUIRED_COLS[1:]].values.tolist()):
         if url and isinstance(url, str) and url.strip():
@@ -162,21 +193,23 @@ def main():
 
     logging.info(f"🔄 Tổng cộng {len(sheet_tasks)} sheet")
 
-    # lấy data
+    # Lấy data song song (limiter sẽ điều tiết để không vượt READ RPM)
     all_data = fetch_all_sheets(client, sheet_tasks, SCHEMA, max_workers=5)
     all_data = normalize_dates(all_data, DATE_COLS)
     all_data.replace([float("inf"), float("-inf")], "", inplace=True)
     all_data.fillna("", inplace=True)
 
-    # update master
-    master_spreadsheet = client.open_by_url(MASTER_SPREADSHEET_URL)
-    ws = master_spreadsheet.worksheet("Test")
+    # Ghi vào Master (WRITE). Lưu ý: lấy worksheet là READ, còn clear/update là WRITE.
+    master_spreadsheet = client.open_by_url(MASTER_SPREADSHEET_URL)     # READ (cached)
+    ws_master = safe_worksheet(master_spreadsheet, "Test")              # READ
 
     values = [all_data.columns.tolist()] + all_data.values.tolist()
-    ws.clear()
-    ws.update(values)
+    rate_limit_write(); ws_master.clear()    # WRITE
+    rate_limit_write(); ws_master.update(values)  # WRITE
 
-    ws.batch_update([
+    # Thêm công thức (WRITE – gom vào batch_update 1 lần nếu muốn)
+    rate_limit_write()
+    ws_master.batch_update([
         {"range": "AR1:AS1", "values": [["channel_by_prod", "team"]]},
         {"range": "AR2", "values": [["=ARRAYFORMULA(ifna(XLOOKUP(D2:D,Source!$A:$A,Source!$C:$C)))"]]},
         {"range": "AS2", "values": [["=ARRAYFORMULA(ifna(XLOOKUP(AO2:AO,Info!$C:$C,Info!$N:$N)))"]]},

@@ -127,6 +127,18 @@ def main():
                     time.sleep(70)
 
     # Xử lý ngày tháng
+
+    # ==== BƯỚC LỌC TRÙNG THEO source, phone, pic VÀ GIỮ ticket_id LỚN NHẤT ====
+    if all(col in all_data.columns for col in ['source', 'phone', 'pic', 'ticket_id']):
+        # Chuyển ticket_id sang số (nếu là dạng chuỗi)
+        all_data['ticket_id'] = pd.to_numeric(all_data['ticket_id'], errors='coerce').fillna(0)
+        
+        # Sắp xếp theo 3 cột và ticket_id giảm dần để ưu tiên bản có ticket_id lớn hơn
+        all_data.sort_values(by=['source', 'phone', 'pic', 'ticket_id'], ascending=[True, True, True, False], inplace=True)
+        
+        # Drop duplicates giữ lại bản đầu tiên (ticket_id lớn nhất trong nhóm)
+        all_data = all_data.drop_duplicates(subset=['source', 'phone', 'pic'], keep='first')
+
     for col in ["date_update", "date_cdd_applied", "recruiter_call_date", "hm_interview_date", "offering_date", "accept_date", "onboard_date"]:
         all_data[col] = all_data[col].apply(try_parsing_date).dt.strftime('%Y-%m-%d')
 
@@ -147,3 +159,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

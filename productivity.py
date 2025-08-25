@@ -8,9 +8,12 @@ from collections import deque
 import gspread
 import pandas as pd
 from google.oauth2.service_account import Credentials
-from requests.exceptions import JSONDecodeError
+from requests.exceptions import JSONDecodeError, ConnectionError, Timeout
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 
+# =========================
+# CONFIG
+# =========================
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
@@ -34,6 +37,11 @@ SCHEMA = [
 DATE_COLS = [
     "date_update", "date_cdd_applied", "recruiter_call_date",
     "hm_interview_date", "offering_date", "accept_date", "onboard_date"
+]
+
+DATE_FORMATS = [
+    "%y/%m/%d", "%Y/%m/%d", "%m/%d/%Y", "%m/%d/%y",
+    "%d-%b-%y", "%d-%b-%Y", "%Y-%m-%d"
 ]
 
 # =========================
@@ -103,11 +111,6 @@ def safe_get_all_records(worksheet):
 # =========================
 # DATE PARSING
 # =========================
-DATE_FORMATS = [
-    "%y/%m/%d", "%Y/%m/%d", "%m/%d/%Y", "%m/%d/%y",
-    "%d-%b-%y", "%d-%b-%Y", "%Y-%m-%d"
-]
-
 def try_parsing_date(text):
     for fmt in DATE_FORMATS:
         try:
@@ -118,7 +121,6 @@ def try_parsing_date(text):
 
 def normalize_dates(df, date_cols):
     for col in date_cols:
-        # Vectorized parsing with fallback
         df[col] = pd.to_datetime(df[col], errors='coerce')
         mask = df[col].isna()
         if mask.any():
@@ -127,11 +129,12 @@ def normalize_dates(df, date_cols):
     return df
 
 # =========================
-# READ SHEETS (retry)
+# READ SHEETS WITH RETRY
 # =========================
 @retry(wait=wait_exponential(multiplier=2, min=2, max=30),
        stop=stop_after_attempt(5),
-       retry=retry_if_exception_type((gspread.exceptions.APIError, JSONDecodeError)))
+       retry=retry_if_exception_type((gspread.exceptions.APIError, JSONDecodeError,
+                                      ConnectionError, Timeout)))
 def read_worksheet(sheet, sheet_name, schema):
     ws = safe_worksheet(sheet, sheet_name)
     data = safe_get_range(ws, "B8:AR")
@@ -143,19 +146,17 @@ def read_worksheet(sheet, sheet_name, schema):
     df["date_update"] = pd.to_datetime(df["date_update"], errors="coerce")
     return df[df["date_update"] >= pd.Timestamp("2025-01-01")]
 
+@retry(wait=wait_exponential(multiplier=2, min=2, max=30),
+       stop=stop_after_attempt(5),
+       retry=retry_if_exception_type((gspread.exceptions.APIError, JSONDecodeError,
+                                      ConnectionError, Timeout)))
 def get_sheet_data(client, url, sheet_name, schema):
-    try:
-        sheet = client.open_by_url(url)
-        df = read_worksheet(sheet, sheet_name, schema)
-        return df
-    except gspread.exceptions.WorksheetNotFound:
-        logging.warning(f"Sheet not found: {sheet_name} in {url}")
-    except Exception as e:
-        logging.error(f"Error reading {sheet_name} in {url}: {e}")
-    return pd.DataFrame(columns=schema)
+    sheet = client.open_by_url(url)
+    df = read_worksheet(sheet, sheet_name, schema)
+    return df
 
 # =========================
-# PARALLEL FETCH
+# FETCH SONG SONG
 # =========================
 def fetch_all_sheets(client, sheet_tasks, schema, max_workers=5):
     all_data = []
@@ -163,17 +164,32 @@ def fetch_all_sheets(client, sheet_tasks, schema, max_workers=5):
         futures = {executor.submit(get_sheet_data, client, url, name, schema): (url, name)
                    for url, name in sheet_tasks}
         for future in as_completed(futures):
-            all_data.append(future.result())
-    if all_data:
-        return pd.concat(all_data, ignore_index=True)
-    return pd.DataFrame(columns=schema)
+            try:
+                all_data.append(future.result())
+            except Exception as e:
+                url, name = futures[future]
+                logging.error(f"❌ Failed sheet {name} in {url}: {e}")
+                # append empty df để không bỏ sót index
+                all_data.append(pd.DataFrame(columns=schema))
+    return pd.concat(all_data, ignore_index=True) if all_data else pd.DataFrame(columns=schema)
 
 # =========================
-# WRITE MASTER (retry)
+# REMOVE DUPLICATES
+# =========================
+def remove_duplicates(df):
+    df["ticket_id_numeric"] = pd.to_numeric(df["ticket_id"], errors="coerce").fillna(0)
+    df = df.sort_values("ticket_id_numeric", ascending=False)
+    df = df.drop_duplicates(subset=["source", "phone", "pic"], keep="first")
+    df = df.drop(columns=["ticket_id_numeric"])
+    return df
+
+# =========================
+# WRITE MASTER
 # =========================
 @retry(wait=wait_exponential(multiplier=2, min=2, max=30),
        stop=stop_after_attempt(5),
-       retry=retry_if_exception_type((gspread.exceptions.APIError, JSONDecodeError)))
+       retry=retry_if_exception_type((gspread.exceptions.APIError, JSONDecodeError,
+                                      ConnectionError, Timeout)))
 def write_master(ws, df):
     values = [df.columns.tolist()] + df.values.tolist()
     rate_limit_write()
@@ -183,9 +199,9 @@ def write_master(ws, df):
         {"range": "A1:AO1", "values": [df.columns.tolist()]},
         {"range": "A2:AO{}".format(len(df)+1), "values": df.values.tolist()},
         {"range": "AR1:AS1", "values": [["channel_by_prod", "team"]]},
+        {"range": "AR2", "values": [["=ARRAYFORMULA(IFNA(XLOOKUP(D2:D,Source!$A:$A,Source!$C:$C)))"]]},
+        {"range": "AS2", "values": [["=ARRAYFORMULA(IFNA(XLOOKUP(AO2:AO,Info!$C:$C,Info!$N:$N)))"]]}
     ])
-    ws.update_cell(2, 44, '=ARRAYFORMULA(ifna(XLOOKUP(D2:D,Source!$A:$A,Source!$C:$C)))') 
-    ws.update_cell(2, 45, '=ARRAYFORMULA(ifna(XLOOKUP(AO2:AO,Info!$C:$C,Info!$N:$N)))')
 
 # =========================
 # MAIN
@@ -207,10 +223,13 @@ def main():
                    for name in filter(None, names)]
     logging.info(f"Total sheets to fetch: {len(sheet_tasks)}")
 
-    # fetch song song
+    # fetch song song với retry từng sheet
     all_data = fetch_all_sheets(client, sheet_tasks, SCHEMA, max_workers=5)
     all_data = normalize_dates(all_data, DATE_COLS)
     all_data.fillna("", inplace=True)
+
+    # remove duplicates
+    all_data = remove_duplicates(all_data)
 
     # ghi vào Master
     master_sheet = client.open_by_url(MASTER_SPREADSHEET_URL)

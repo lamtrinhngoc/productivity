@@ -45,7 +45,7 @@ class GSpreadClientWithCache:
 @retry(
     wait=wait_chain(
         wait_exponential(multiplier=1, min=1, max=60) + wait_random(0, 1)
-    )
+    ),
     stop=stop_after_attempt(5),
     retry=retry_if_exception_type((gspread.exceptions.APIError, JSONDecodeError)),
     reraise=True
@@ -162,4 +162,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 

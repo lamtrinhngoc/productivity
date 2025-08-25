@@ -133,12 +133,12 @@ def get_sheet_data(client, url, sheet_name, schema):
     try:
         sheet = client.open_by_url(url)
         df = read_worksheet_with_retry(sheet, sheet_name, schema)
-        logging.info(f"✅ {sheet_name} từ {url}")
+        logging.info(f"✅ {sheet_name}")
         return df
     except gspread.exceptions.WorksheetNotFound:
-        logging.error(f"❌ Không tìm thấy sheet {sheet_name} trong {url}")
+        logging.error(f"❌ Không tìm thấy sheet {sheet_name}")
     except Exception as e:
-        logging.error(f"❌ Lỗi sheet {sheet_name} từ {url}: {e}")
+        logging.error(f"❌ Lỗi sheet {sheet_name} : {e}")
     return pd.DataFrame(columns=schema)
 
 # =========================
@@ -159,9 +159,22 @@ def fetch_all_sheets(client, sheet_tasks, schema, max_workers=5):
 # =========================
 # CLEAN DATA
 # =========================
+DATE_FORMATS = [
+    "%y/%m/%d", "%Y/%m/%d", "%m/%d/%Y", "%m/%d/%y",
+    "%d-%b-%y", "%d-%b-%Y", "%Y-%m-%d"
+]
+
+def try_parsing_date(text):
+    for fmt in DATE_FORMATS:
+        try:
+            return pd.to_datetime(text, format=fmt)
+        except (ValueError, TypeError):
+            continue
+    return pd.NaT
+
 def normalize_dates(df, date_cols):
     for col in date_cols:
-        df[col] = pd.to_datetime(df[col], errors="coerce").dt.strftime("%Y-%m-%d")
+        df[col] = df[col].apply(try_parsing_date).dt.strftime("%Y-%m-%d")
     return df
 
 # =========================
@@ -214,3 +227,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

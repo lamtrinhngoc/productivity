@@ -8,10 +8,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from requests.exceptions import JSONDecodeError
 from tenacity import retry, wait_exponential, wait_random, wait_chain, stop_after_attempt, retry_if_exception_type
 
-
 # ========================== CONFIG ==========================
-MAX_WORKERS = 15  # số luồng đọc song song
-API_SLEEP_THRESHOLD = 70  # nghỉ khi gần quota
+MAX_WORKERS = 5  # số luồng đọc song song
+API_SLEEP_THRESHOLD = 60  # nghỉ khi gần quota
 LOG_FILE = "log_process.log"
 
 # ========================== LOGGING ==========================
@@ -20,18 +19,11 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
-console = logging.StreamHandler()
-console.setLevel(logging.INFO)
-formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-console.setFormatter(formatter)
-logging.getLogger().addHandler(console)
 
 # ========================== AUTH ==========================
 def authenticate_gspread():
-    logging.info("Đang xác thực Google API...")
     scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     creds = Credentials.from_service_account_file('credentials.json', scopes=scopes)
-    logging.info("Xác thực thành công.")
     return gspread.authorize(creds)
 
 # ========================== CACHED CLIENT ==========================
@@ -43,37 +35,14 @@ class GSpreadClientWithCache:
     def open_by_url(self, url):
         if url not in self.cache:
             try:
-                logging.info(f"Mở spreadsheet: {url}")
                 self.cache[url] = self.client.open_by_url(url)
+                logging.info(f"Mở thành công spreadsheet: {url}")
             except gspread.exceptions.APIError as e:
                 logging.error(f"Không thể mở bảng: {url}. Lỗi: {e}")
                 self.cache[url] = None
         return self.cache[url]
 
-# ========================== RETRY WRAPPER ==========================
-@retry(
-    wait=wait_chain(wait_exponential(multiplier=1, min=1, max=60) + wait_random(0, 1)),
-    stop=stop_after_attempt(5),
-    retry=retry_if_exception_type((gspread.exceptions.APIError, JSONDecodeError)),
-    reraise=True
-)
-def read_sheet_with_retry(sheet, sheet_name, schema):
-    logging.info(f"Đọc dữ liệu từ sheet: {sheet.title} -> {sheet_name}")
-    ws = sheet.worksheet(sheet_name)
-    data = ws.get_all_values()
-    if len(data) < 8:
-        logging.warning(f"Sheet {sheet_name} có ít hơn 8 dòng. Bỏ qua.")
-        return pd.DataFrame(columns=schema)
-
-    df = pd.DataFrame(data[7:])
-    df.columns = schema[:len(df.columns)]
-    df = df.reindex(columns=schema)
-    df = df.fillna('')
-    df['date_update'] = df['date_update'].apply(try_parse_date)
-    df = df[df['date_update'] >= pd.Timestamp("2025-01-01")]
-    logging.info(f"Đọc sheet {sheet_name} thành công. Số dòng hợp lệ: {len(df)}")
-    return df
-
+# ========================== DATE PARSE ==========================
 def try_parse_date(text):
     if not text:
         return pd.NaT
@@ -84,11 +53,42 @@ def try_parse_date(text):
             continue
     return pd.NaT
 
+# ========================== RETRY WRAPPER ==========================
+@retry(
+    wait=wait_chain(
+        wait_exponential(multiplier=1, min=1, max=60) + wait_random(0, 1)
+    ),
+    stop=stop_after_attempt(5),
+    retry=retry_if_exception_type((gspread.exceptions.APIError, JSONDecodeError)),
+    reraise=True
+)
+def read_sheet_with_retry(sheet, sheet_name, schema):
+    logging.info(f"Đang đọc sheet '{sheet_name}' từ B8:AR ...")
+    ws = sheet.worksheet(sheet_name)
+    data = ws.get("B8:AR")  # Chỉ lấy từ B8 đến AR
+
+    if not data:
+        logging.warning(f"Sheet {sheet_name} không có dữ liệu từ B8:AR")
+        return pd.DataFrame(columns=schema)
+
+    df = pd.DataFrame(data)
+    logging.info(f"{sheet_name}: Đọc được {df.shape[0]} dòng, {df.shape[1]} cột")
+
+    # Fix cứng số cột theo schema
+    df = df.iloc[:, :len(schema)]
+    df.columns = schema
+    df = df.reindex(columns=schema).fillna('')
+
+    # Chuẩn hóa cột date_update
+    df['date_update'] = df['date_update'].apply(try_parse_date)
+    df = df[df['date_update'] >= pd.Timestamp("2025-01-01")]
+    logging.info(f"{sheet_name}: Sau khi lọc còn {len(df)} dòng hợp lệ")
+    return df
+
 # ========================== GET DATA ==========================
 def get_sheet_data(client_cache, url, sheet_name, schema):
     sheet = client_cache.open_by_url(url)
     if sheet is None:
-        logging.error(f"Bảng {url} không mở được. Bỏ qua.")
         return pd.DataFrame(columns=schema)
 
     try:
@@ -101,9 +101,7 @@ def get_sheet_data(client_cache, url, sheet_name, schema):
 
 # ========================== CLEAN DATA ==========================
 def clean_and_deduplicate(df):
-    logging.info("Bắt đầu làm sạch & loại bỏ trùng...")
     if df.empty:
-        logging.warning("Không có dữ liệu để làm sạch.")
         return df
     if all(col in df.columns for col in ['source', 'phone', 'pic', 'ticket_id']):
         df['ticket_id'] = pd.to_numeric(df['ticket_id'], errors='coerce').fillna(0)
@@ -119,32 +117,29 @@ def clean_and_deduplicate(df):
 
     df.replace([float('inf'), float('-inf')], '', inplace=True)
     df.fillna('', inplace=True)
-    logging.info(f"Làm sạch hoàn tất. Tổng số dòng sau lọc: {len(df)}")
     return df
 
 # ========================== MAIN ==========================
 def main():
     start_time = time.time()
-    logging.info("Bắt đầu tiến trình tổng hợp dữ liệu...")
+    logging.info("=== Bắt đầu quá trình tổng hợp dữ liệu ===")
     client_cache = GSpreadClientWithCache(authenticate_gspread())
 
     # Lấy danh sách link
-    logging.info("Đang lấy danh sách link sheet...")
     link_spreadsheet = client_cache.open_by_url('https://docs.google.com/spreadsheets/d/10eMZVnmtyyr5JAzDvpE5Brgh-8fw3lEKmGvL5m6eCUY')
     link_sheet = link_spreadsheet.worksheet("Productivity File")
     df_links = pd.DataFrame(link_sheet.get_all_records())
     sheet_urls = df_links['Link'].tolist()
     sheet_names = df_links[['Sheet 1', 'Sheet 2', 'Sheet 3', 'Sheet 4', 'Sheet 5']].values.tolist()
-    logging.info(f"Đã lấy {len(sheet_urls)} file cần xử lý.")
 
     schema = [
-        "date_update", "date_cdd_applied", "fullname", "source", "dob", "phone", "area", 
-        "address", "registration_area", "previous_work", "id_code", "note", "email", "rehire", 
-        "current_salary", "expected_ob_date", "position", "station_name", "storage", 
-        "reason_for_storage", "notes_for_recruitment", "recruiter_call", "recruiter_call_date", 
-        "recruiter_call_feedback", "recruiter_call_result", "hm_interview_date", "hm_interview", 
-        "hm_interview_feedback", "hm_interview_result", "offering", "offering_date", "accept", 
-        "accept_date", "onboard_date", "onboard", "reason_reject_ob", "finish_process", 
+        "date_update", "date_cdd_applied", "fullname", "source", "dob", "phone", "area",
+        "address", "registration_area", "previous_work", "id_code", "note", "email", "rehire",
+        "current_salary", "expected_ob_date", "position", "station_name", "storage",
+        "reason_for_storage", "notes_for_recruitment", "recruiter_call", "recruiter_call_date",
+        "recruiter_call_feedback", "recruiter_call_result", "hm_interview_date", "hm_interview",
+        "hm_interview_feedback", "hm_interview_result", "offering", "offering_date", "accept",
+        "accept_date", "onboard_date", "onboard", "reason_reject_ob", "finish_process",
         "fullname_ob", "phone_ob", "id_code_ob", "pic", "ticket_id", "rider_id"
     ]
 
@@ -156,13 +151,13 @@ def main():
             if not url.strip():
                 continue
             for name in filter(None, names):
+                logging.info(f"Đưa vào hàng đợi: {url} - {name}")
                 futures.append(executor.submit(get_sheet_data, client_cache, url, name, schema))
-                logging.info(f"Đã gửi task đọc sheet {name} từ {url}")
 
         for i, future in enumerate(as_completed(futures), 1):
             result = future.result()
             all_data.append(result)
-            logging.info(f"Hoàn thành task {i}/{len(futures)}")
+            logging.info(f"Đã xử lý xong {i}/{len(futures)} sheet")
             if i % API_SLEEP_THRESHOLD == 0:
                 logging.info("Tạm nghỉ 70s để tránh quota limit...")
                 time.sleep(70)
@@ -170,15 +165,15 @@ def main():
     all_data = pd.concat(all_data, ignore_index=True)
     all_data = clean_and_deduplicate(all_data)
 
-    logging.info("Đang ghi dữ liệu về Master sheet...")
+    # Ghi về Master
+    logging.info(f"Đang ghi dữ liệu tổng hợp ({len(all_data)} dòng) về Master...")
     master_spreadsheet = client_cache.open_by_url('https://docs.google.com/spreadsheets/d/1VlXicEr1FGrpdDcRpuv1aE2TAG-7QHEfWKNtFJF4nc8')
     master_sheet = master_spreadsheet.worksheet("Test")
     master_sheet.clear()
     master_sheet.update([all_data.columns.values.tolist()] + all_data.values.tolist())
-    logging.info(f"Ghi dữ liệu thành công. Tổng {len(all_data)} dòng.")
 
     elapsed = time.time() - start_time
-    logging.info(f"Hoàn thành! Tổng thời gian: {elapsed:.2f} giây.")
+    logging.info(f"=== Hoàn thành! Tổng thời gian: {elapsed:.2f} giây, Tổng dòng: {len(all_data)} ===")
 
 if __name__ == "__main__":
     main()

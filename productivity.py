@@ -176,14 +176,14 @@ def normalize_dates(df, date_cols):
         df[col] = df[col].apply(try_parsing_date).dt.strftime('%Y-%m-%d')
         df[col] = df[col].fillna("")
         
-    if "ticket_id" not in df.columns:
-        df["ticket_id"] = -1
-    else:
-        df["ticket_id"] = pd.to_numeric(df["ticket_id"], errors="coerce").fillna(-1)
-    if not {"phone", "source", "pic"}.issubset(df.columns):
-        return df
-    idx = df.groupby(["phone", "source", "pic"])["ticket_id"].idxmax()
-    return df.loc[idx].reset_index(drop=True)
+    # if "ticket_id" not in df.columns:
+    #     df["ticket_id"] = -1
+    # else:
+    #     df["ticket_id"] = pd.to_numeric(df["ticket_id"], errors="coerce").fillna(-1)
+    # if not {"phone", "source", "pic"}.issubset(df.columns):
+    #     return df
+    # idx = df.groupby(["phone", "source", "pic"])["ticket_id"].idxmax()
+    # return df.loc[idx].reset_index(drop=True)
 
     return df
 
@@ -232,6 +232,7 @@ def main():
     values = [all_data.columns.tolist()] + all_data.values.tolist()
 
     rate_limit_write()
+    ws_master.clear_content
     ws_master.batch_update([
         {"range": "A1", "values": values},
         {"range": "AR1:AS1", "values": [["channel_by_prod", "team"]]},
@@ -243,4 +244,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 

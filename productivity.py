@@ -113,6 +113,17 @@ def safe_get_range(worksheet, rng: str):
     retry=retry_if_exception_type((gspread.exceptions.APIError, JSONDecodeError)),
     reraise=True
 )
+
+def try_parsing_date(text):
+    if pd.isna(text):
+        return pd.NaT
+    for fmt in ('%y/%m/%d', '%Y/%m/%d', '%m/%d/%Y', '%m/%d/%y', '%d-%b-%y', '%d-%b-%Y', '%Y-%m-%d'):
+        try:
+            return pd.to_datetime(text, format=fmt, errors="raise")
+        except ValueError:
+            continue
+    return pd.NaT
+
 def read_worksheet_with_retry(ws, schema):
     data = safe_get_range(ws, "B8:AR")       # READ
     if not data:
@@ -120,7 +131,7 @@ def read_worksheet_with_retry(ws, schema):
     df = pd.DataFrame(data)
     df.columns = schema[:len(df.columns)]
     df = df.reindex(columns=schema).fillna("")
-    df["date_update"] = pd.to_datetime(df["date_update"], errors="coerce")
+    df["date_update"] = df['date_update'].apply(try_parsing_date)
     df = df[df["date_update"] >= pd.Timestamp("2025-01-01")]
     return df.to_dict("records")
 
@@ -162,7 +173,15 @@ def fetch_all_sheets(client, sheet_tasks, schema, max_workers=6):
 # =========================
 def normalize_dates(df, date_cols):
     for col in date_cols:
-        df[col] = pd.to_datetime(df[col], errors="coerce").dt.strftime("%Y-%m-%d")
+        df[col] = df[col].apply(try_parsing_date).dt.strftime('%Y-%m-%d')
+    if "ticket_id" not in df.columns:
+        df["ticket_id"] = -1
+    else:
+        df["ticket_id"] = pd.to_numeric(df["ticket_id"], errors="coerce").fillna(-1)
+    if not {"phone", "source", "pic"}.issubset(df.columns):
+        return df
+    idx = df.groupby(["phone", "source", "pic"])["ticket_id"].idxmax()
+    return df.loc[idx].reset_index(drop=True)
     return df
 
 # =========================
@@ -220,7 +239,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-

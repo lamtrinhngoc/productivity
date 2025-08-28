@@ -9,7 +9,7 @@ import gspread
 import pandas as pd
 from google.oauth2.service_account import Credentials
 from requests.exceptions import JSONDecodeError
-from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type, wait_fixed
+from tenacity import retry, wait_fixed, stop_after_attempt, retry_if_exception_type
 
 # =========================
 # CONFIG
@@ -105,27 +105,33 @@ def safe_get_range(worksheet, rng: str):
     return worksheet.get(rng)
 
 # =========================
-# READ SHEETS (retry)
+# UTILS
 # =========================
-@retry(
-    wait=wait_fixed(3),  # mỗi lần cách 3s
-    stop=stop_after_attempt(3),
-    retry=retry_if_exception_type((gspread.exceptions.APIError, JSONDecodeError)),
-    reraise=True
-)
-
 def try_parsing_date(text):
-    if pd.isna(text):
+    if pd.isna(text) or not str(text).strip():
         return pd.NaT
-    for fmt in ('%y/%m/%d', '%Y/%m/%d', '%m/%d/%Y', '%m/%d/%y', '%d-%b-%y', '%d-%b-%Y', '%Y-%m-%d'):
+    for fmt in ('%y/%m/%d', '%Y/%m/%d', '%m/%d/%Y', '%m/%d/%y',
+                '%d-%b-%y', '%d-%b-%Y', '%Y-%m-%d'):
         try:
             return pd.to_datetime(text, format=fmt, errors="raise")
         except ValueError:
             continue
-    return pd.NaT
+    try:
+        return pd.to_datetime(text, errors="coerce")
+    except Exception:
+        return pd.NaT
 
+# =========================
+# READ SHEETS (retry)
+# =========================
+@retry(
+    wait=wait_fixed(3),
+    stop=stop_after_attempt(3),
+    retry=retry_if_exception_type((gspread.exceptions.APIError, JSONDecodeError)),
+    reraise=True
+)
 def read_worksheet_with_retry(ws, schema):
-    data = safe_get_range(ws, "B8:AR")       # READ
+    data = safe_get_range(ws, "B8:AR")
     if not data:
         return []
     df = pd.DataFrame(data)
@@ -154,15 +160,15 @@ def get_sheet_data(client, url, sheet_name, schema, error_log):
 # =========================
 def fetch_all_sheets(client, sheet_tasks, schema, max_workers=4, max_rounds=5):
     all_rows = []
-    error_log = sheet_tasks[:]  # copy ban đầu
+    error_log = sheet_tasks[:]
 
     for round_no in range(1, max_rounds + 1):
         if not error_log:
             break
 
         logging.info(f"🔄 Bắt đầu vòng {round_no}, còn {len(error_log)} sheet lỗi cần retry")
-
         current_errors = []
+
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
                 executor.submit(get_sheet_data, client, url, name, schema, current_errors): (url, name)
@@ -188,7 +194,8 @@ def fetch_all_sheets(client, sheet_tasks, schema, max_workers=4, max_rounds=5):
         for url, name in error_log:
             logging.error(f"   - {url} :: {name}")
 
-    return pd.DataFrame.from_records(all_rows, columns=schema)
+    df_all = pd.DataFrame.from_records(all_rows, columns=schema)
+    return df_all, error_log
 
 # =========================
 # CLEAN DATA
@@ -205,7 +212,7 @@ def normalize_dates(df, date_cols):
     else:
         df["ticket_id"] = pd.to_numeric(df["ticket_id"], errors="coerce").fillna(-1)
 
-    # Chuẩn hoá phone: chỉ lấy 9 số cuối
+    # Chuẩn hoá phone: chỉ giữ 9 số cuối
     if "phone" in df.columns:
         df["phone"] = df["phone"].astype(str).str.replace(r"\D", "", regex=True)  # chỉ giữ số
         df["phone"] = df["phone"].str[-9:]                                        # lấy 9 số cuối
@@ -225,9 +232,9 @@ def main():
     client = GSpreadClientWithCache(authenticate_gspread())
 
     # đọc danh sách link
-    link_spreadsheet = client.open_by_url(LINK_SPREADSHEET_URL)   # READ
-    ws_links = client.worksheet(link_spreadsheet, "Productivity File")  # READ
-    data_links = ws_links.get_all_records()                        # READ
+    link_spreadsheet = client.open_by_url(LINK_SPREADSHEET_URL)
+    ws_links = client.worksheet(link_spreadsheet, "Productivity File")
+    data_links = ws_links.get_all_records()
     df_links = pd.DataFrame(data_links)
 
     if not all(c in df_links.columns for c in REQUIRED_COLS):
@@ -256,9 +263,9 @@ def main():
     all_data.replace([float("inf"), float("-inf")], "", inplace=True)
     all_data.fillna("", inplace=True)
 
-    # ghi vào Master (batch update duy nhất)
-    master_spreadsheet = client.open_by_url(MASTER_SPREADSHEET_URL)   # READ
-    ws_master = client.worksheet(master_spreadsheet, "Productivity")  # READ
+    # ghi vào Master
+    master_spreadsheet = client.open_by_url(MASTER_SPREADSHEET_URL)
+    ws_master = client.worksheet(master_spreadsheet, "Productivity")
 
     values = [all_data.columns.tolist()] + all_data.values.tolist()
 
@@ -275,9 +282,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-

@@ -42,8 +42,8 @@ DATE_COLS = [
 # =========================
 # TOKEN BUCKET RATE LIMITER
 # =========================
-READ_RATE_LIMIT = int(os.getenv("GSHEETS_READ_RPM", "55"))   # 55 để có buffer
-WRITE_RATE_LIMIT = int(os.getenv("GSHEETS_WRITE_RPM", "55"))
+READ_RATE_LIMIT = int(os.getenv("GSHEETS_READ_RPM", "58"))   # 55 để có buffer
+WRITE_RATE_LIMIT = int(os.getenv("GSHEETS_WRITE_RPM", "58"))
 WINDOW = 60.0
 
 _read_tokens = deque()
@@ -140,7 +140,7 @@ def get_sheet_data(client, url, sheet_name, schema):
 # =========================
 # FETCH SONG SONG
 # =========================
-def fetch_all_sheets(client, sheet_tasks, schema, max_workers=6):
+def fetch_all_sheets(client, sheet_tasks, schema, max_workers=8):
     all_rows = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(get_sheet_data, client, url, name, schema): (url, name) for url, name in sheet_tasks}
@@ -208,3 +208,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

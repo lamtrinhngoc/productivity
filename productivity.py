@@ -152,7 +152,7 @@ def get_sheet_data(client, url, sheet_name, schema, error_log):
 # =========================
 # FETCH SONG SONG
 # =========================
-def fetch_all_sheets_with_retry(client, sheet_tasks, schema, max_workers=4, max_rounds=5):
+def fetch_all_sheets(client, sheet_tasks, schema, max_workers=4, max_rounds=5):
     all_rows = []
     error_log = sheet_tasks[:]  # copy ban đầu
 
@@ -275,6 +275,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 

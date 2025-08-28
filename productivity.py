@@ -152,38 +152,69 @@ def get_sheet_data(client, url, sheet_name, schema, error_log):
 # =========================
 # FETCH SONG SONG
 # =========================
-def fetch_all_sheets(client, sheet_tasks, schema, max_workers=4):
+def fetch_all_sheets_with_retry(client, sheet_tasks, schema, max_workers=4, max_rounds=5):
     all_rows = []
-    error_log = []
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(get_sheet_data, client, url, name, schema, error_log): (url, name)
-            for url, name in sheet_tasks
-        }
-        for future in as_completed(futures):
-            try:
-                all_rows.extend(future.result())
-            except Exception as e:
-                url, name = futures[future]
-                logging.error(f"❌ Task fail {name} trong {url}: {e}")
-    return pd.DataFrame.from_records(all_rows, columns=schema), error_log
+    error_log = sheet_tasks[:]  # copy ban đầu
+
+    for round_no in range(1, max_rounds + 1):
+        if not error_log:
+            break
+
+        logging.info(f"🔄 Bắt đầu vòng {round_no}, còn {len(error_log)} sheet lỗi cần retry")
+
+        current_errors = []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(get_sheet_data, client, url, name, schema, current_errors): (url, name)
+                for url, name in error_log
+            }
+            for future in as_completed(futures):
+                try:
+                    rows = future.result()
+                    all_rows.extend(rows)
+                except Exception as e:
+                    url, name = futures[future]
+                    logging.error(f"❌ Task fail {name} trong {url}: {e}")
+                    current_errors.append((url, name))
+
+        error_log = current_errors
+        if error_log:
+            sleep_time = 5 * round_no
+            logging.warning(f"⚠️ Vẫn còn {len(error_log)} sheet lỗi, chờ {sleep_time}s rồi retry...")
+            time.sleep(sleep_time)
+
+    if error_log:
+        logging.error(f"❌ Sau {max_rounds} vòng vẫn còn {len(error_log)} sheet lỗi:")
+        for url, name in error_log:
+            logging.error(f"   - {url} :: {name}")
+
+    return pd.DataFrame.from_records(all_rows, columns=schema)
 
 # =========================
 # CLEAN DATA
 # =========================
 def normalize_dates(df, date_cols):
+    # Chuẩn hoá các cột ngày
     for col in date_cols:
         df[col] = df[col].apply(try_parsing_date).dt.strftime('%Y-%m-%d')
         df[col] = df[col].fillna("")
-        
+
+    # Chuẩn hoá ticket_id
     if "ticket_id" not in df.columns:
         df["ticket_id"] = -1
     else:
         df["ticket_id"] = pd.to_numeric(df["ticket_id"], errors="coerce").fillna(-1)
-    if not {"phone", "source", "pic"}.issubset(df.columns):
-        return df
-    idx = df.groupby(["phone", "source", "pic"])["ticket_id"].idxmax()
-    return df.loc[idx].reset_index(drop=True)
+
+    # Chuẩn hoá phone: chỉ lấy 9 số cuối
+    if "phone" in df.columns:
+        df["phone"] = df["phone"].astype(str).str.replace(r"\D", "", regex=True)  # chỉ giữ số
+        df["phone"] = df["phone"].str[-9:]                                        # lấy 9 số cuối
+        df["phone"] = df["phone"].replace(["nan", "NaN", "None"], "").fillna("")
+
+    # Lọc trùng theo phone + source + pic (lấy ticket_id lớn nhất)
+    if {"phone", "source", "pic"}.issubset(df.columns):
+        idx = df.groupby(["phone", "source", "pic"])["ticket_id"].idxmax()
+        df = df.loc[idx].reset_index(drop=True)
 
     return df
 
@@ -244,6 +275,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 

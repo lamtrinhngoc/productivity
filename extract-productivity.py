@@ -41,19 +41,24 @@ def main():
     )
 
     mapping = {
-        '3. Staff': 'FTE Staff',
-        '6. Driver': 'Driver',
-        '6. Driver (X-Metro)': 'Driver - X-metro',
-        '4. Rider': 'Rider',
-        '8. Part-time Rider': 'Rider Part-time',
-        '4. Rider Freelancer': 'Rider Freelancer',
-        '4. Rider SDD': 'Rider SDD',
-        '6. Driver (Van)': 'Driver - Van',
-        '6. Driver - 2T': 'Driver - 2T',
-        '6. Driver - 5T': 'Driver - 5T',
-        '6. Driver - 8T': 'Driver - 8T',
-        '6. Driver (Bulky)': 'Driver - Bulky',
-        '6. Driver - 1T25': 'Driver - 1T25'
+        "3. Staff": "FTE Staff",
+        "3. Staff (DC)": "FTE Staff (DC)",
+        "4. Rider": "Rider",
+        "4. Rider - Lơ xe": "Rider - Lơ xe",
+        "4. Rider Freelancer": "Rider Freelancer",
+        "4. Rider Part-time": "Rider Part-time",
+        "4. Rider SDD": "Rider SDD",
+        "6. Driver": "Driver",
+        "6. Driver - 1T25": "Driver - 1T25",
+        "6. Driver - 2T": "Driver - 2T",
+        "6. Driver - 5T": "Driver - 5T",
+        "6. Driver - 8T": "Driver - 8T",
+        "6. Driver - Bulky": "Driver - Bulky",
+        "6. Driver (Bulky)": "Driver - Bulky (Khổ)",
+        "6. Driver (Van)": "Driver - Van",
+        "6. Driver (X-Metro)": "Driver - X-metro",
+        "7. Freelancer Rider": "Rider Freelancer",
+        "8. Part-time Rider": "Rider Part-time",
     }
 
     df_all_member_productivity['position'] = df_all_member_productivity['position'].replace(mapping)

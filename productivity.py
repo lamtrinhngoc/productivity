@@ -232,7 +232,7 @@ def main():
     values = [all_data.columns.tolist()] + all_data.values.tolist()
 
     rate_limit_write()
-    ws_master.clear_content
+    ws_master.clear()
     ws_master.batch_update([
         {"range": "A1", "values": values},
         {"range": "AR1:AS1", "values": [["channel_by_prod", "team"]]},
@@ -244,5 +244,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 

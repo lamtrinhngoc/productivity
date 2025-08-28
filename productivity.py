@@ -9,7 +9,7 @@ import gspread
 import pandas as pd
 from google.oauth2.service_account import Credentials
 from requests.exceptions import JSONDecodeError
-from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
+from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type, wait_fixed
 
 # =========================
 # CONFIG
@@ -108,10 +108,10 @@ def safe_get_range(worksheet, rng: str):
 # READ SHEETS (retry)
 # =========================
 @retry(
-    wait=wait_exponential(multiplier=2, min=2, max=60),
-    stop=stop_after_attempt(5),
+    wait=wait_fixed(3),  # mỗi lần cách 3s
+    stop=stop_after_attempt(3),
     retry=retry_if_exception_type((gspread.exceptions.APIError, JSONDecodeError)),
-    reraise=False
+    reraise=True
 )
 def read_worksheet_with_retry(ws, schema):
     data = safe_get_range(ws, "B8:AR")       # READ
@@ -124,7 +124,7 @@ def read_worksheet_with_retry(ws, schema):
     df = df[df["date_update"] >= pd.Timestamp("2025-01-01")]
     return df.to_dict("records")
 
-def get_sheet_data(client, url, sheet_name, schema):
+def get_sheet_data(client, url, sheet_name, schema, error_log):
     try:
         sheet = client.open_by_url(url)
         ws = client.worksheet(sheet, sheet_name)
@@ -135,6 +135,7 @@ def get_sheet_data(client, url, sheet_name, schema):
         logging.error(f"❌ Không tìm thấy sheet {sheet_name} trong {url}")
     except Exception as e:
         logging.error(f"❌ Lỗi sheet {sheet_name} từ {url}: {e}")
+        error_log.append((url, sheet_name))
     return []
 
 # =========================
@@ -142,6 +143,7 @@ def get_sheet_data(client, url, sheet_name, schema):
 # =========================
 def fetch_all_sheets(client, sheet_tasks, schema, max_workers=6):
     all_rows = []
+    error_log = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(get_sheet_data, client, url, name, schema): (url, name) for url, name in sheet_tasks}
         for future in as_completed(futures):
@@ -150,7 +152,7 @@ def fetch_all_sheets(client, sheet_tasks, schema, max_workers=6):
             except Exception as e:
                 url, name = futures[future]
                 logging.error(f"❌ Task fail {name} trong {url}: {e}")
-    return pd.DataFrame.from_records(all_rows, columns=schema)
+    return pd.DataFrame.from_records(all_rows, columns=schema), error_log
 
 # =========================
 # CLEAN DATA
@@ -185,10 +187,17 @@ def main():
     logging.info(f"🔄 Tổng cộng {len(sheet_tasks)} sheet")
 
     # lấy data song song
-    all_data = fetch_all_sheets(client, sheet_tasks, SCHEMA, max_workers=6)
+    all_data, error_log = fetch_all_sheets(client, sheet_tasks, SCHEMA, max_workers=6)
     all_data = normalize_dates(all_data, DATE_COLS)
     all_data.replace([float("inf"), float("-inf")], "", inplace=True)
     all_data.fillna("", inplace=True)
+
+    if error_log:
+        logging.warning(f"🔄 Thử chạy lại {len(error_log)} sheet lỗi")
+        retry_data, retry_error = fetch_all_sheets(client, error_log, SCHEMA, max_workers=4)
+        all_data = pd.concat([all_data, retry_data], ignore_index=True)
+        if retry_error:
+            logging.error(f"⚠️ Vẫn còn {len(retry_error)} sheet lỗi sau khi retry: {retry_error}")
 
     # ghi vào Master (batch update duy nhất)
     master_spreadsheet = client.open_by_url(MASTER_SPREADSHEET_URL)   # READ
@@ -208,5 +217,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 

@@ -59,7 +59,7 @@ def _acquire_token(tokens: deque, limit: int, kind: str):
             if len(tokens) < limit:
                 tokens.append(now)
                 return
-            wait_seconds = WINDOW - (now - tokens[0]) + 0.05
+            wait_seconds = WINDOW - (now - tokens[0]) + 0.1
         time.sleep(wait_seconds if wait_seconds > 0 else 0.1)
 
 def rate_limit_read():
@@ -152,7 +152,7 @@ def get_sheet_data(client, url, sheet_name, schema, error_log):
 # =========================
 # FETCH SONG SONG
 # =========================
-def fetch_all_sheets(client, sheet_tasks, schema, max_workers=6):
+def fetch_all_sheets(client, sheet_tasks, schema, max_workers=4):
     all_rows = []
     error_log = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -176,14 +176,14 @@ def normalize_dates(df, date_cols):
         df[col] = df[col].apply(try_parsing_date).dt.strftime('%Y-%m-%d')
         df[col] = df[col].fillna("")
         
-    # if "ticket_id" not in df.columns:
-    #     df["ticket_id"] = -1
-    # else:
-    #     df["ticket_id"] = pd.to_numeric(df["ticket_id"], errors="coerce").fillna(-1)
-    # if not {"phone", "source", "pic"}.issubset(df.columns):
-    #     return df
-    # idx = df.groupby(["phone", "source", "pic"])["ticket_id"].idxmax()
-    # return df.loc[idx].reset_index(drop=True)
+    if "ticket_id" not in df.columns:
+        df["ticket_id"] = -1
+    else:
+        df["ticket_id"] = pd.to_numeric(df["ticket_id"], errors="coerce").fillna(-1)
+    if not {"phone", "source", "pic"}.issubset(df.columns):
+        return df
+    idx = df.groupby(["phone", "source", "pic"])["ticket_id"].idxmax()
+    return df.loc[idx].reset_index(drop=True)
 
     return df
 
@@ -244,6 +244,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 

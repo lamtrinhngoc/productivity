@@ -54,19 +54,13 @@ def _acquire_token(tokens: deque, limit: int, kind: str):
     while True:
         with _lock:
             now = time.monotonic()
-            # remove expired
             while tokens and (now - tokens[0]) > WINDOW:
                 tokens.popleft()
             if len(tokens) < limit:
                 tokens.append(now)
                 return
-            # quota full, phải chờ
             wait_seconds = WINDOW - (now - tokens[0]) + 0.1
-        if wait_seconds > 0:
-            logging.info(f"⏳ {kind} quota full ({len(tokens)}/{limit}). Sleeping {wait_seconds:.2f}s...")
-            time.sleep(wait_seconds)
-        else:
-            time.sleep(0.1)
+        time.sleep(wait_seconds if wait_seconds > 0 else 0.1)
 
 def rate_limit_read():
     _acquire_token(_read_tokens, READ_RATE_LIMIT, "READ")
@@ -85,6 +79,7 @@ class GSpreadClientWithCache:
     def __init__(self, client):
         self.client = client
         self._ss_cache = {}
+        self._ws_cache = {}
         self._lock = threading.Lock()
 
     def open_by_url(self, url):
@@ -94,20 +89,20 @@ class GSpreadClientWithCache:
                 self._ss_cache[url] = self.client.open_by_url(url)
             return self._ss_cache[url]
 
+    def worksheet(self, spreadsheet, name: str):
+        key = (spreadsheet.id, name)
+        with self._lock:
+            if key not in self._ws_cache:
+                rate_limit_read()
+                self._ws_cache[key] = spreadsheet.worksheet(name)
+            return self._ws_cache[key]
+
 # =========================
 # SAFE WRAPPERS
 # =========================
-def safe_worksheet(spreadsheet, name: str):
-    rate_limit_read()
-    return spreadsheet.worksheet(name)
-
 def safe_get_range(worksheet, rng: str):
     rate_limit_read()
     return worksheet.get(rng)
-
-def safe_get_all_records(worksheet):
-    rate_limit_read()
-    return worksheet.get_all_records()
 
 # =========================
 # READ SHEETS (retry)
@@ -118,43 +113,44 @@ def safe_get_all_records(worksheet):
     retry=retry_if_exception_type((gspread.exceptions.APIError, JSONDecodeError)),
     reraise=False
 )
-def read_worksheet_with_retry(sheet, sheet_name, schema):
-    ws = safe_worksheet(sheet, sheet_name)   # READ
+def read_worksheet_with_retry(ws, schema):
     data = safe_get_range(ws, "B8:AR")       # READ
     if not data:
-        return pd.DataFrame(columns=schema)
+        return []
     df = pd.DataFrame(data)
     df.columns = schema[:len(df.columns)]
     df = df.reindex(columns=schema).fillna("")
     df["date_update"] = pd.to_datetime(df["date_update"], errors="coerce")
-    return df[df["date_update"] >= pd.Timestamp("2025-01-01")]
+    df = df[df["date_update"] >= pd.Timestamp("2025-01-01")]
+    return df.to_dict("records")
 
 def get_sheet_data(client, url, sheet_name, schema):
     try:
         sheet = client.open_by_url(url)
-        df = read_worksheet_with_retry(sheet, sheet_name, schema)
+        ws = client.worksheet(sheet, sheet_name)
+        rows = read_worksheet_with_retry(ws, schema)
         logging.info(f"✅ {sheet_name} từ {url}")
-        return df
+        return rows
     except gspread.exceptions.WorksheetNotFound:
         logging.error(f"❌ Không tìm thấy sheet {sheet_name} trong {url}")
     except Exception as e:
         logging.error(f"❌ Lỗi sheet {sheet_name} từ {url}: {e}")
-    return pd.DataFrame(columns=schema)
+    return []
 
 # =========================
 # FETCH SONG SONG
 # =========================
-def fetch_all_sheets(client, sheet_tasks, schema, max_workers=5):
-    all_data = []
+def fetch_all_sheets(client, sheet_tasks, schema, max_workers=6):
+    all_rows = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(get_sheet_data, client, url, name, schema): (url, name) for url, name in sheet_tasks}
         for future in as_completed(futures):
             try:
-                all_data.append(future.result())
+                all_rows.extend(future.result())
             except Exception as e:
                 url, name = futures[future]
                 logging.error(f"❌ Task fail {name} trong {url}: {e}")
-    return pd.concat(all_data, ignore_index=True) if all_data else pd.DataFrame(columns=schema)
+    return pd.DataFrame.from_records(all_rows, columns=schema)
 
 # =========================
 # CLEAN DATA
@@ -172,8 +168,8 @@ def main():
 
     # đọc danh sách link
     link_spreadsheet = client.open_by_url(LINK_SPREADSHEET_URL)   # READ
-    ws_links = safe_worksheet(link_spreadsheet, "Productivity File")  # READ
-    data_links = safe_get_all_records(ws_links)                        # READ
+    ws_links = client.worksheet(link_spreadsheet, "Productivity File")  # READ
+    data_links = ws_links.get_all_records()                        # READ
     df_links = pd.DataFrame(data_links)
 
     if not all(c in df_links.columns for c in REQUIRED_COLS):
@@ -189,29 +185,26 @@ def main():
     logging.info(f"🔄 Tổng cộng {len(sheet_tasks)} sheet")
 
     # lấy data song song
-    all_data = fetch_all_sheets(client, sheet_tasks, SCHEMA, max_workers=3)
+    all_data = fetch_all_sheets(client, sheet_tasks, SCHEMA, max_workers=6)
     all_data = normalize_dates(all_data, DATE_COLS)
     all_data.replace([float("inf"), float("-inf")], "", inplace=True)
     all_data.fillna("", inplace=True)
 
-    # ghi vào Master
+    # ghi vào Master (batch update duy nhất)
     master_spreadsheet = client.open_by_url(MASTER_SPREADSHEET_URL)   # READ
-    ws_master = safe_worksheet(master_spreadsheet, "Productivity")    # READ
+    ws_master = client.worksheet(master_spreadsheet, "Productivity")  # READ
 
     values = [all_data.columns.tolist()] + all_data.values.tolist()
-    rate_limit_write(); ws_master.clear()          # WRITE
-    rate_limit_write(); ws_master.update(values)   # WRITE
 
-    # thêm công thức
     rate_limit_write()
     ws_master.batch_update([
-        {"range": "AR1:AS1", "values": [["channel_by_prod", "team"]]}
-    ])
-    ws_master.update_acell("AR2", "=ARRAYFORMULA(IFNA(XLOOKUP(D2:D,Source!$A:$A,Source!$C:$C)))")
-    ws_master.update_acell("AS2", "=ARRAYFORMULA(IFNA(XLOOKUP(AO2:AO,Info!$C:$C,Info!$N:$N)))")
+        {"range": "A1", "values": values},
+        {"range": "AR1:AS1", "values": [["channel_by_prod", "team"]]},
+        {"range": "AR2", "values": [["=ARRAYFORMULA(IFNA(XLOOKUP(D2:D,Source!$A:$A,Source!$C:$C)))"]]},
+        {"range": "AS2", "values": [["=ARRAYFORMULA(IFNA(XLOOKUP(AO2:AO,Info!$C:$C,Info!$N:$N)))"]]}
+    ], value_input_option="USER_ENTERED")
 
     logging.info("✅ DONE")
 
 if __name__ == "__main__":
     main()
-

@@ -145,7 +145,10 @@ def fetch_all_sheets(client, sheet_tasks, schema, max_workers=6):
     all_rows = []
     error_log = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(get_sheet_data, client, url, name, schema): (url, name) for url, name in sheet_tasks}
+        futures = {
+            executor.submit(get_sheet_data, client, url, name, schema, error_log): (url, name)
+            for url, name in sheet_tasks
+        }
         for future in as_completed(futures):
             try:
                 all_rows.extend(future.result())
@@ -217,6 +220,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 

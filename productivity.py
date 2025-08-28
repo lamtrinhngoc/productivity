@@ -174,6 +174,8 @@ def fetch_all_sheets(client, sheet_tasks, schema, max_workers=6):
 def normalize_dates(df, date_cols):
     for col in date_cols:
         df[col] = df[col].apply(try_parsing_date).dt.strftime('%Y-%m-%d')
+        df[col] = df[col].fillna("")
+        
     if "ticket_id" not in df.columns:
         df["ticket_id"] = -1
     else:
@@ -182,6 +184,7 @@ def normalize_dates(df, date_cols):
         return df
     idx = df.groupby(["phone", "source", "pic"])["ticket_id"].idxmax()
     return df.loc[idx].reset_index(drop=True)
+
     return df
 
 # =========================
@@ -210,9 +213,6 @@ def main():
 
     # lấy data song song
     all_data, error_log = fetch_all_sheets(client, sheet_tasks, SCHEMA, max_workers=6)
-    all_data = normalize_dates(all_data, DATE_COLS)
-    all_data.replace([float("inf"), float("-inf")], "", inplace=True)
-    all_data.fillna("", inplace=True)
 
     if error_log:
         logging.warning(f"🔄 Thử chạy lại {len(error_log)} sheet lỗi")
@@ -220,6 +220,10 @@ def main():
         all_data = pd.concat([all_data, retry_data], ignore_index=True)
         if retry_error:
             logging.error(f"⚠️ Vẫn còn {len(retry_error)} sheet lỗi sau khi retry: {retry_error}")
+
+    all_data = normalize_dates(all_data, DATE_COLS)
+    all_data.replace([float("inf"), float("-inf")], "", inplace=True)
+    all_data.fillna("", inplace=True)
 
     # ghi vào Master (batch update duy nhất)
     master_spreadsheet = client.open_by_url(MASTER_SPREADSHEET_URL)   # READ
@@ -239,3 +243,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

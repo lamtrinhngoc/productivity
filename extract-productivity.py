@@ -53,10 +53,12 @@ def main():
         "6. Driver - 2T": "Driver - 2T",
         "6. Driver - 5T": "Driver - 5T",
         "6. Driver - 8T": "Driver - 8T",
+        "6. Driver (Bulky)": "Driver - Bulky (Có xe)",
         "6. Driver - Bulky (Có xe)": "Driver - Bulky (Có xe)",
         "6. Driver - Bulky (Không xe)": "Driver - Bulky (Không xe)",
         "6. Driver (Van)": "Driver - Van",
-        "6. Driver (X-Metro)": "Driver - X-metro",
+        "6. Driver - Van": "Driver - Van",
+        "6. Driver (LH X-metro)": "Driver - 8T",
         "7. Freelancer Rider": "Rider Freelancer",
         "8. Part-time Rider": "Rider Part-time",
     }

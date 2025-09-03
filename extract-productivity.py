@@ -195,8 +195,28 @@ def main():
         [soc_linehaul.columns.values.tolist()] + soc_linehaul.values.tolist(),
         value_input_option='USER_ENTERED'
     )
+    
+    # File Linehaul-Bulky project
 
-# File track SDD
+    soc_linehaul_bulky = df_all_member_productivity[
+        (df_all_member_productivity['position'].str.contains("Bulky", na=False)) |
+        (df_all_member_productivity['position'].str.contains("Rider - Lơ xe", na=False)) |
+        (df_all_member_productivity['position'].str.contains("FTE Staff (DC)", na=False))
+    ]
+
+    soc_linehaul_bulky_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1d8Q_r7PP9URrODzF0QoqfHsGkobrucHxsxTzgzzeft0')
+    if soc_linehaul_bulky_spreadsheet is None:
+        return
+
+    soc_linehaul_bulky_sheet = soc_linehaul_bulky_spreadsheet.worksheet("Raw Productivity")
+    soc_linehaul_bulky_sheet.clear()
+    soc_linehaul_sheet.update(
+        [soc_linehaul_bulky.columns.values.tolist()] + soc_linehaul_bulky.values.tolist(),
+        value_input_option='USER_ENTERED'
+    )
+      
+
+    # File track SDD
 
     rider_sdd = df_all_member_productivity[
         df_all_member_productivity['position'].str.contains("Rider SDD", na=False)

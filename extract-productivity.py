@@ -212,7 +212,7 @@ def main():
 
     soc_linehaul_bulky_sheet = soc_linehaul_bulky_spreadsheet.worksheet("Raw Productivity")
     soc_linehaul_bulky_sheet.clear()
-    soc_linehaul_sheet.update(
+    soc_linehaul_bulky_sheet.update(
         [soc_linehaul_bulky.columns.values.tolist()] + soc_linehaul_bulky.values.tolist(),
         value_input_option='USER_ENTERED'
     )

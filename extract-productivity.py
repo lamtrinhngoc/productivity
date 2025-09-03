@@ -203,7 +203,7 @@ def main():
     soc_linehaul_bulky = df_all_member_productivity[
         (df_all_member_productivity['position'].str.contains("Bulky", na=False)) |
         (df_all_member_productivity['position'].str.contains("Rider - Lơ xe", na=False)) |
-        (df_all_member_productivity['position'].str.contains("FTE Staff (DC)", na=False))
+        (df_all_member_productivity['position'].str.contains("DC", na=False))
     ]
 
     soc_linehaul_bulky_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1d8Q_r7PP9URrODzF0QoqfHsGkobrucHxsxTzgzzeft0')

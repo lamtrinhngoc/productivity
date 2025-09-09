@@ -61,6 +61,7 @@ def main():
         "6. Driver (LH X-metro)": "Driver - 8T",
         "7. Freelancer Rider": "Rider Freelancer",
         "8. Part-time Rider": "Rider Part-time",
+        "4. Rider SDD (PT)": "Rider SDD (PT)"
     }
 
     df_all_member_productivity['position'] = df_all_member_productivity['position'].replace(mapping)
@@ -223,8 +224,6 @@ def main():
     rider_sdd = df_all_member_productivity[
         df_all_member_productivity['position'].str.contains("Rider SDD", na=False)
     ]
-
-    rider_sdd_hn = rider_sdd[(rider_sdd['team'] == 'Huyen Trang') | (rider_sdd['team'] == 'Thu Hien')]
 
     rider_sdd_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1sItVLyDOaGWx2eWzxdJBygRnwLmJ4h5RiKBDb6glnJI')
     if rider_sdd_spreadsheet is None:

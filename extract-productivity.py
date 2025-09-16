@@ -3,6 +3,7 @@ from google.oauth2.service_account import Credentials
 import pandas as pd
 import numpy as np
 import logging
+import re
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -30,9 +31,25 @@ def main():
     df_all_member_productivity = pd.DataFrame(master_data)
     df_all_member_productivity = df_all_member_productivity.astype(str)
 
+    def preprocess_date_string(val):
+        if pd.isna(val):
+            return None
+        val = str(val).strip()
+        if not val:
+            return None
+    
+        # Nếu match pattern mm/dd/yyyy thì chuyển thành yyyy-mm-dd
+        mm_dd_yyyy = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", val)
+        if mm_dd_yyyy:
+            m, d, y = mm_dd_yyyy.groups()
+            return f"{y}-{int(m):02d}-{int(d):02d}"
+    
+        return val  # trả về nguyên nếu không match
+
     # Define date columns and filter data
     date_columns = ['date_update', 'recruiter_call_date', 'hm_interview_date', 'offering_date', 'accept_date', 'onboard_date']
     for col in date_columns:
+        df_all_member_productivity[col] = df_all_member_productivity[col].apply(preprocess_date_string)
         df_all_member_productivity[col] = pd.to_datetime(df_all_member_productivity[col], errors='coerce')
         
 

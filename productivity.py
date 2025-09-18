@@ -219,7 +219,7 @@ def normalize_dates(df, date_cols):
         df["phone"] = df["phone"].replace(["nan", "NaN", "None"], "").fillna("")
 
     # Lọc trùng theo phone + source + pic (lấy ticket_id lớn nhất)
-    if {"phone", "source", "pic"}.issubset(df.columns):
+    if {"phone", "pic"}.issubset(df.columns):
         idx = df.groupby(["phone", "source", "pic"])["ticket_id"].idxmax()
         df = df.loc[idx].reset_index(drop=True)
 
@@ -282,6 +282,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 

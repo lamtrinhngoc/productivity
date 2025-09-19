@@ -209,7 +209,7 @@ def normalize_dates(df, date_cols):
     # Chuẩn hoá ticket_id
     action = ["recruiter_call","hm_interview","offering","accept","onboard"]
     for c in action:
-        df[c] = pd.to_numeric(df.get(c, 0), errors="coerce").fillna(0)
+        df[c] = pd.to_numeric(df[c], errors="coerce")
     df["ticket_id"] = pd.to_numeric(df.get("ticket_id", 0), errors="coerce").fillna(0)
     df.loc[df["ticket_id"] < 20, "ticket_id"] = df.loc[df["ticket_id"] < 20, action].sum(axis=1)
 
@@ -283,6 +283,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 

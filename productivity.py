@@ -207,10 +207,9 @@ def normalize_dates(df, date_cols):
         df[col] = df[col].fillna("")
 
     # Chuẩn hoá ticket_id
-    if "ticket_id" not in df.columns:
-        df["ticket_id"] = -1
-    else:
-        df["ticket_id"] = pd.to_numeric(df["ticket_id"], errors="coerce").fillna(-1)
+    action = ["recruiter_call","hm_interview","offering","accept","onboard"]
+    df["ticket_id"] = pd.to_numeric(df.get("ticket_id", 0), errors="coerce").fillna(0)
+    df.loc[df["ticket_id"] < 20, "ticket_id"] = df.loc[df["ticket_id"] < 20, action].sum(axis=1)
 
     # Chuẩn hoá phone: chỉ giữ 9 số cuối
     if "phone" in df.columns:
@@ -282,6 +281,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 

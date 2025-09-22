@@ -84,10 +84,16 @@ def main():
     df_all_member_productivity['position'] = df_all_member_productivity['position'].replace(mapping)
 
     
-    df_all_member_productivity['area'] = df_all_member_productivity['area'].apply(
-    lambda x: 'South' if x in ['SE', 'SW'] else ('HNI' if x == 'HN' else x)
-    )
-
+    df_all_member_productivity['area'] = df_all_member_productivity.apply(
+        lambda row: (
+            'South' if row['area'] in ['SE', 'SW'] else
+            'HNI' if row['area'] == 'HN' else
+            'HNI' if 'Hà Nội' in str(row['address']) else
+            'HCM' if 'Hồ Chí Minh' in str(row['address']) else
+            row['area']
+        ),
+        axis=1
+    )    
 
     for col in date_columns:
         df_all_member_productivity[col] = df_all_member_productivity[col].dt.strftime('%Y-%m-%d')

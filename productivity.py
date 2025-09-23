@@ -219,10 +219,25 @@ def normalize_dates(df, date_cols):
         df["phone"] = df["phone"].str[-9:]                                        # lấy 9 số cuối
         df["phone"] = df["phone"].replace(["nan", "NaN", "None"], "").fillna("")
 
-    # Lọc trùng theo phone + source + pic (lấy ticket_id lớn nhất)
-    if {"phone", "pic", "position"}.issubset(df.columns):
-        idx = df.groupby(["phone", "pic", "position"])["ticket_id"].idxmax()
-        df = df.loc[idx].reset_index(drop=True)
+    # Lọc trùng theo phone + pic + position (ưu tiên id_code, nếu không có id_code thì ticket_id lớn nhất)
+    required_cols = {"phone", "pic", "position", "ticket_id"}
+    if required_cols.issubset(df.columns):
+        if "id_code" not in df.columns:
+            df["id_code"] = ""
+        df["id_code"] = df["id_code"].fillna("").astype(str).str.strip()
+
+        selected_idx = []
+        for _, group in df.groupby(["phone", "pic", "position"], sort=False):
+            group_id_code = group[group["id_code"].str.len() > 0]
+            if not group_id_code.empty:
+                # lấy bản ghi id_code có ticket_id lớn nhất
+                keep_idx = group_id_code["ticket_id"].idxmax()
+            else:
+                # không có id_code, lấy bản ghi có ticket_id lớn nhất
+                keep_idx = group["ticket_id"].idxmax()
+            selected_idx.append(keep_idx)
+
+        df = df.loc[selected_idx].reset_index(drop=True)
 
     return df
 
@@ -283,6 +298,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 

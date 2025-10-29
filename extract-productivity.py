@@ -209,7 +209,7 @@ def main():
 
     soc_linehaul = df_all_member_productivity[
         (df_all_member_productivity['position'].str.contains("Driver", na=False)) &
-        (~df_all_member_productivity['position'].str.contains("bulky", case=False, na=False))
+        (~df_all_member_productivity['position'].str.contains("Bulky", case=False, na=False))
     ]
 
 

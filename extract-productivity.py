@@ -208,8 +208,10 @@ def main():
     # File Linehaul project
 
     soc_linehaul = df_all_member_productivity[
-        (df_all_member_productivity['position'].str.contains("Driver", na=False))
+        (df_all_member_productivity['position'].str.contains("Driver", na=False)) &
+        (~df_all_member_productivity['position'].str.contains("bulky", case=False, na=False))
     ]
+
 
     soc_linehaul_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1y12mSMS03JCWRDkVojJWNt93R7E_p3poUa5xEGIUmgk')
     if soc_linehaul_spreadsheet is None:

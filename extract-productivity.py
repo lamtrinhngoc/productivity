@@ -103,10 +103,10 @@ def main():
     # File [WFA] Performance Management | Yen Phan
 
     yen_phan = df_all_member_productivity[
-        (df_all_member_productivity['team'] == "Gia Han") |
+        (df_all_member_productivity['team'] == "Trinh Phan") |
         (df_all_member_productivity['team'] == "Yen Phan") |
-        (df_all_member_productivity['team'] == "Cam Giang") |
-        (df_all_member_productivity['team'] == "Yen Nhi")
+        (df_all_member_productivity['team'] == "Hoa Bui") |
+        (df_all_member_productivity['team'] == "Nhi Tran")
     ]
     
     yen_phan_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1E-kFjoHSmOnrDK_O4tpegxBh5qh4wTxfhvMXoL-p5O4')

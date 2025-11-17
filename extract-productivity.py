@@ -205,6 +205,23 @@ def main():
         value_input_option='USER_ENTERED'
     )
 
+    # File [WFA] Performance Management | Nhi Tran
+
+    nhi_tran = df_all_member_productivity[
+        (df_all_member_productivity['team'] == "Nhi Tran")
+    ]
+    
+    nhi_tran_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1rduwnpSBfEpZk0Tk0D3ATDlLaYOFFT5fsUU5Maqx2wU')
+    if nhi_tran_spreadsheet is None:
+        return
+
+    nhi_tran_sheet = nhi_tran_spreadsheet.worksheet("Raw Productivity")
+    nhi_tran_sheet.clear()
+    nhi_tran_sheet.update(
+        [nhi_tran.columns.values.tolist()] + nhi_tran.values.tolist(),
+        value_input_option='USER_ENTERED'
+    )
+
     # File Linehaul project
 
     soc_linehaul = df_all_member_productivity[

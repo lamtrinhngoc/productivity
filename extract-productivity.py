@@ -78,7 +78,16 @@ def main():
         "6. Driver (LH X-metro)": "Driver - 8T",
         "7. Freelancer Rider": "Rider Freelancer",
         "8. Part-time Rider": "Rider Part-time",
-        "4. Rider SDD (PT)": "Rider SDD (PT)"
+        "4. Rider SDD (PT)": "Rider SDD (PT)",
+        "3. Staff - WH": "Warehouse Staff",
+        "WH - Inbound": "Warehouse Staff",
+        "WH - Outbound": "Warehouse Staff",
+        "WH - Inventory": "Warehouse Staff",
+        "WH - Return": "Warehouse Staff",
+        "BD contractor": "BD contractor",
+        "Telesale": "BD contractor",
+        "BD Satellite Sales": "BD contractor",
+        "KAM": "BD contractor"
     }
 
     df_all_member_productivity['position'] = df_all_member_productivity['position'].replace(mapping)

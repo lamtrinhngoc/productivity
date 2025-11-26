@@ -236,8 +236,8 @@ def main():
     # File Linehaul project
 
     soc_linehaul = df_all_member_productivity[
-        (df_all_member_productivity['position'].str.contains("Driver", na=False)) &
-        (~df_all_member_productivity['position'].str.contains("Bulky", case=False, na=False))
+        (df_all_member_productivity['position'].str.contains("Driver", na=False)) 
+       # & (~df_all_member_productivity['position'].str.contains("Bulky", case=False, na=False))
     ]
 
 

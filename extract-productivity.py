@@ -115,7 +115,9 @@ def main():
         (df_all_member_productivity['team'] == "Trinh Phan") |
         (df_all_member_productivity['team'] == "Yen Phan") |
         (df_all_member_productivity['team'] == "Hoa Bui") |
-        (df_all_member_productivity['team'] == "Nhi Tran")
+        (df_all_member_productivity['team'] == "Nhi Tran") |
+        (df_all_member_productivity['team'] == "Van Anh") |
+        (df_all_member_productivity['team'] == "Hoai Phuong")
     ]
     
     yen_phan_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1E-kFjoHSmOnrDK_O4tpegxBh5qh4wTxfhvMXoL-p5O4')

@@ -87,7 +87,8 @@ def main():
         "BD contractor": "BD contractor",
         "Telesale": "BD contractor",
         "BD Satellite Sales": "BD contractor",
-        "KAM": "BD contractor"
+        "KAM": "BD contractor",
+        "S.BPO": "S-BPO"
     }
 
     df_all_member_productivity['position'] = df_all_member_productivity['position'].replace(mapping)
@@ -285,6 +286,22 @@ def main():
     rider_sdd_sheet.clear()
     rider_sdd_sheet.update(
         [rider_sdd.columns.values.tolist()] + rider_sdd.values.tolist(),
+        value_input_option='USER_ENTERED'
+    )
+
+    # File track S-BPO
+
+    s_bpo = df_all_member_productivity[
+        df_all_member_productivity['position'].str.contains("S-BPO", na=False)
+    ]
+
+    s_bpo_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1mUOEC77iRXnTqfuaN5IiE1yA6EJZkOZlaRBPlWYUiV0')
+    if s_bpo_spreadsheet is None:
+        return
+    s_bpo_sheet = s_bpo_spreadsheet.worksheet("Raw Productivity")
+    s_bpo_sheet.clear()
+    s_bpo_sheet.update(
+        [s_bpo.columns.values.tolist()] + s_bpo.values.tolist(),
         value_input_option='USER_ENTERED'
     )
     

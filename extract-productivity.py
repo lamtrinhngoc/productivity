@@ -303,13 +303,9 @@ def main():
     # File Binh Duong SOC
 
     soc_bd = df_all_member_productivity[
-        (
-            df_all_member_productivity['station_name'].str.contains("Binh Duong", na=False)
-            & df_all_member_productivity['station_name'].str.contains("SOC", na=False)
-        )
-        | (
-            df_all_member_productivity['position'].str.contains("FTE Staff", na=False)
-        )
+        df_all_member_productivity['station_name'].str.contains("Binh Duong", na=False)
+        & df_all_member_productivity['station_name'].str.contains("SOC", na=False)
+        & df_all_member_productivity['position'].str.contains("FTE Staff", na=False)
     ]
 
     soc_bd_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1-uKjt-NamVr3eOwAycYicJnFkTF5SkzQeI0PX7O_r9k')

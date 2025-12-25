@@ -54,7 +54,7 @@ def main():
         
 
     df_all_member_productivity['station_name'] = df_all_member_productivity['station_name'].apply(
-    lambda x: 'BD A Mega SOC' if 'Binh Duong' in x and 'SOC' in x else x
+    lambda x: 'BD A Mega SOC' if 'Binh Duong 1' in x and 'SOC' in x else x
     )
 
     mapping = {
@@ -297,6 +297,28 @@ def main():
     s_bpo_sheet.clear()
     s_bpo_sheet.update(
         [s_bpo.columns.values.tolist()] + s_bpo.values.tolist(),
+        value_input_option='USER_ENTERED'
+    )
+
+    # File Binh Duong SOC
+
+    soc_bd = df_all_member_productivity[
+        (
+            df_all_member_productivity['station_name'].str.contains("Binh Duong", na=False)
+            & df_all_member_productivity['station_name'].str.contains("SOC", na=False)
+        )
+        | (
+            df_all_member_productivity['position'].str.contains("FTE Staff", na=False)
+        )
+    ]
+
+    soc_bd_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1-uKjt-NamVr3eOwAycYicJnFkTF5SkzQeI0PX7O_r9k')
+    if soc_bd_spreadsheet is None:
+        return
+    soc_bd_sheet = soc_bd_spreadsheet.worksheet("Raw Productivity")
+    soc_bd_sheet.clear()
+    soc_bd_sheet.update(
+        [soc_bd.columns.values.tolist()] + soc_bd.values.tolist(),
         value_input_option='USER_ENTERED'
     )
     

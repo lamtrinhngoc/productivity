@@ -303,8 +303,11 @@ def main():
     # File Binh Duong SOC
 
     soc_bd = df_all_member_productivity[
-        df_all_member_productivity['station_name'].str.contains("Binh Duong", na=False)
-        & df_all_member_productivity['station_name'].str.contains("SOC", na=False)
+        df_all_member_productivity['station_name'].isin([
+            "Binh Duong 1 SOC",
+            "BD A Mega SOC",
+            "BD B Mega SOC"
+        ])
         & df_all_member_productivity['position'].str.contains("FTE Staff", na=False)
     ]
 

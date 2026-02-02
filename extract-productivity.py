@@ -147,7 +147,8 @@ def main():
     # File [WFA] Performance Management | Trinh Phan
 
     trinh_phan = df_all_member_productivity[
-        (df_all_member_productivity['team'] == "Trinh Phan")
+        (df_all_member_productivity['team'] == "Trinh Phan") |
+        (df_all_member_productivity['team'] == "Hoai Phuong")
     ]
     
     trinh_phan_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1Iwt_1x_KHzRAQZ9FEi0hBeGBfTrvbwxDyrjjGkz6VRU')

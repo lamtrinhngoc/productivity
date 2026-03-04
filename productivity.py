@@ -1,36 +1,25 @@
 import os
-import csv
 import time
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import deque
-from datetime import datetime
 
 import gspread
 import pandas as pd
 from google.oauth2.service_account import Credentials
-
-try:
-    from tqdm import tqdm
-    HAS_TQDM = True
-except ImportError:
-    HAS_TQDM = False
+from requests.exceptions import JSONDecodeError
+from tenacity import retry, wait_fixed, stop_after_attempt, retry_if_exception_type
 
 # =========================
 # CONFIG
 # =========================
-# Đổi sang DEBUG để xem timing chi tiết, INFO để chạy production
-LOG_LEVEL = os.getenv("LOG_LEVEL", "DEBUG")
-logging.basicConfig(level=getattr(logging, LOG_LEVEL), format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive",
-]
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 
-LINK_SPREADSHEET_URL  = "https://docs.google.com/spreadsheets/d/10eMZVnmtyyr5JAzDvpE5Brgh-8fw3lEKmGvL5m6eCUY"
-MASTER_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/17rB2UiQ_tUdl4eX4nbOllq2_XDe3bBFA4RIoiv7v3lc/edit?gid=0#gid=0"
+LINK_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/10eMZVnmtyyr5JAzDvpE5Brgh-8fw3lEKmGvL5m6eCUY"
+MASTER_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1VlXicEr1FGrpdDcRpuv1aE2TAG-7QHEfWKNtFJF4nc8"
 
 REQUIRED_COLS = ["Link", "Sheet 1", "Sheet 2", "Sheet 3", "Sheet 4", "Sheet 5"]
 
@@ -51,434 +40,270 @@ DATE_COLS = [
 ]
 
 # =========================
-# RATE LIMIT CONFIG
+# TOKEN BUCKET RATE LIMITER
 # =========================
-# KEY INSIGHT: dùng batchGet lấy nhiều sheets trong 1 API call
-#   Trước: 1000 sheets × 1 call = 1000 calls → ~18 phút
-#   Sau:    200 files × 1 call  =  200 calls → ~4 phút
-#
-# Quota vẫn là 60 read/min nên giữ SAFE_READ_RPM = 55
-# MAX_WORKERS = 4 là đủ — bottleneck là quota, không phải CPU
+READ_RATE_LIMIT = int(os.getenv("GSHEETS_READ_RPM", "56"))   # 55 để có buffer
+WRITE_RATE_LIMIT = int(os.getenv("GSHEETS_WRITE_RPM", "56"))
+WINDOW = 60.0
 
-MAX_WORKERS    = int(os.getenv("GSHEETS_WORKERS",  "4"))
-SAFE_READ_RPM  = int(os.getenv("GSHEETS_READ_RPM", "55"))
-SAFE_WRITE_RPM = int(os.getenv("GSHEETS_WRITE_RPM","55"))
-WINDOW         = 60.0
-MAX_RETRY_ROUNDS = 4
-DATE_FILTER_FROM = pd.Timestamp("2025-01-01")
+_read_tokens = deque()
+_write_tokens = deque()
+_lock = threading.Lock()
 
-# =========================
-# RATE LIMITER
-# =========================
-class RateLimiter:
-    """
-    Sliding-window + min interval để tránh burst.
-    Khi gặp 429: caller tự sleep 65s rồi gọi acquire() lại.
-    """
-    def __init__(self, limit: int, window: float = 60.0):
-        self._limit        = limit
-        self._window       = window
-        self._min_interval = window / limit
-        self._timestamps: deque = deque()
-        self._last_issued  = 0.0
-        self._lock         = threading.Lock()
+def _acquire_token(tokens: deque, limit: int, kind: str):
+    while True:
+        with _lock:
+            now = time.monotonic()
+            while tokens and (now - tokens[0]) > WINDOW:
+                tokens.popleft()
+            if len(tokens) < limit:
+                tokens.append(now)
+                return
+            wait_seconds = WINDOW - (now - tokens[0]) + 0.1
+        time.sleep(wait_seconds if wait_seconds > 0 else 0.1)
 
-    @property
-    def min_interval(self) -> float:
-        return self._min_interval
+def rate_limit_read():
+    _acquire_token(_read_tokens, READ_RATE_LIMIT, "READ")
 
-    def acquire(self):
-        t_start = time.monotonic()
-        while True:
-            with self._lock:
-                now = time.monotonic()
-                while self._timestamps and (now - self._timestamps[0]) > self._window:
-                    self._timestamps.popleft()
-                window_ok   = len(self._timestamps) < self._limit
-                interval_ok = (now - self._last_issued) >= self._min_interval
-                if window_ok and interval_ok:
-                    self._timestamps.append(now)
-                    self._last_issued = now
-                    waited = time.monotonic() - t_start
-                    if waited > 2.0:   # chỉ log khi chờ lâu bất thường
-                        logging.debug(f"[rate_limiter] chờ {waited:.1f}s trước khi được phép gọi API")
-                    return
-                waits = []
-                if not window_ok:
-                    waits.append(self._window - (now - self._timestamps[0]) + 0.02)
-                if not interval_ok:
-                    waits.append(self._min_interval - (now - self._last_issued) + 0.02)
-            time.sleep(max(max(waits) if waits else 0.05, 0.02))
-
-    def __repr__(self):
-        return f"RateLimiter({self._limit}/min, gap={self._min_interval:.2f}s)"
-
-
-_read_limiter  = RateLimiter(SAFE_READ_RPM)
-_write_limiter = RateLimiter(SAFE_WRITE_RPM)
+def rate_limit_write():
+    _acquire_token(_write_tokens, WRITE_RATE_LIMIT, "WRITE")
 
 # =========================
-# AUTH
+# AUTH + CLIENT CACHE
 # =========================
-def authenticate():
-    """Trả về gspread client."""
+def authenticate_gspread():
     creds = Credentials.from_service_account_file("credentials.json", scopes=SCOPES)
     return gspread.authorize(creds)
+
+class GSpreadClientWithCache:
+    def __init__(self, client):
+        self.client = client
+        self._ss_cache = {}
+        self._ws_cache = {}
+        self._lock = threading.Lock()
+
+    def open_by_url(self, url):
+        with self._lock:
+            if url not in self._ss_cache:
+                rate_limit_read()
+                self._ss_cache[url] = self.client.open_by_url(url)
+            return self._ss_cache[url]
+
+    def worksheet(self, spreadsheet, name: str):
+        key = (spreadsheet.id, name)
+        with self._lock:
+            if key not in self._ws_cache:
+                rate_limit_read()
+                self._ws_cache[key] = spreadsheet.worksheet(name)
+            return self._ws_cache[key]
+
+# =========================
+# SAFE WRAPPERS
+# =========================
+def safe_get_range(worksheet, rng: str):
+    rate_limit_read()
+    return worksheet.get(rng)
 
 # =========================
 # UTILS
 # =========================
-_DATE_FORMATS = (
-    '%y/%m/%d', '%Y/%m/%d', '%m/%d/%Y', '%m/%d/%y',
-    '%d-%b-%y', '%d-%b-%Y', '%Y-%m-%d',
-)
-
 def try_parsing_date(text):
     if pd.isna(text) or not str(text).strip():
         return pd.NaT
-    for fmt in _DATE_FORMATS:
+    for fmt in ('%y/%m/%d', '%Y/%m/%d', '%m/%d/%Y', '%m/%d/%y',
+                '%d-%b-%y', '%d-%b-%Y', '%Y-%m-%d'):
         try:
             return pd.to_datetime(text, format=fmt, errors="raise")
         except ValueError:
             continue
-    return pd.to_datetime(text, errors="coerce")
-
-def _spreadsheet_id_from_url(url: str) -> str:
-    """Trích spreadsheet ID từ Google Sheets URL."""
-    import re
-    m = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", url)
-    if not m:
-        raise ValueError(f"Không thể trích ID từ URL: {url}")
-    return m.group(1)
+    try:
+        return pd.to_datetime(text, errors="coerce")
+    except Exception:
+        return pd.NaT
 
 # =========================
-# CORE: batchGet — 1 API call lấy nhiều sheets cùng lúc
+# READ SHEETS (retry)
 # =========================
-def _batch_get_sheets(
-    spreadsheet,
-    sheet_names: list[str],
-    data_range: str = "B8:AR",
-) -> dict[str, list]:
-    """
-    Dùng gspread values_batch_get() — 1 HTTP call lấy nhiều sheets.
-    Dùng gspread values_batch_get — không cần cài thêm package.
-
-    Returns: {sheet_name: [[row], [row], ...]}
-    """
-    ranges = [f"'{name}'!{data_range}" for name in sheet_names]
-    _read_limiter.acquire()
-    t_net = time.monotonic()
-    result = spreadsheet.values_batch_get(
-        ranges=ranges,
-        params={"valueRenderOption": "FORMATTED_VALUE", "dateTimeRenderOption": "FORMATTED_STRING"},
-    )
-    logging.debug(f"[network] batchGet {len(sheet_names)} sheets = {time.monotonic()-t_net:.2f}s | {spreadsheet.id}")
-    out = {}
-    for vr in result.get("valueRanges", []):
-        raw_range = vr.get("range", "")
-        sheet_name = raw_range.split("!")[0].strip("'")
-        out[sheet_name] = vr.get("values", [])
-    return out
-
-
-def _parse_sheet_data(rows: list[list], schema: list[str]) -> list[dict]:
-    """Chuyển raw rows → list of dicts, filter theo date_update."""
-    if not rows:
+@retry(
+    wait=wait_fixed(3),
+    stop=stop_after_attempt(3),
+    retry=retry_if_exception_type((gspread.exceptions.APIError, JSONDecodeError)),
+    reraise=True
+)
+def read_worksheet_with_retry(ws, schema):
+    data = safe_get_range(ws, "B8:AR")
+    if not data:
         return []
-    df = pd.DataFrame(rows)
-    df.columns = schema[: len(df.columns)]
+    df = pd.DataFrame(data)
+    df.columns = schema[:len(df.columns)]
     df = df.reindex(columns=schema).fillna("")
-    df["date_update"] = df["date_update"].apply(try_parsing_date)
-    df = df[df["date_update"] >= DATE_FILTER_FROM]
+    df["date_update"] = df['date_update'].apply(try_parsing_date)
+    df = df[df["date_update"] >= pd.Timestamp("2025-01-01")]
     return df.to_dict("records")
 
-
-def _is_quota_error(exc: Exception) -> bool:
-    if isinstance(exc, gspread.exceptions.APIError):
-        resp = getattr(exc, "response", None)
-        return getattr(resp, "status_code", 0) == 429
-    return False
-
-
-# =========================
-# FETCH TASK — 1 file = 1 task = 1 API call (batchGet)
-# =========================
-def _fetch_spreadsheet(
-    client: gspread.Client,
-    url: str,
-    sheet_names: list[str],
-    schema: list[str],
-) -> tuple[list[dict], bool, bool]:
-    """
-    Đọc tất cả sheet_names từ 1 spreadsheet bằng 1 batchGet call.
-
-    Returns: (rows, success, retryable)
-    """
-    t_file = time.monotonic()
-    for attempt in range(1, 5):
-        try:
-            _read_limiter.acquire()  # acquire cho open_by_url
-            ss  = client.open_by_url(url)
-            raw = _batch_get_sheets(ss, sheet_names)
-            rows = []
-            for name in sheet_names:
-                rows.extend(_parse_sheet_data(raw.get(name, []), schema))
-            logging.debug(f"[file_ok] {len(rows)} rows, {len(sheet_names)} sheets, total={time.monotonic()-t_file:.2f}s | {url}")
-            return rows, True, False
-
-        except Exception as exc:
-            if attempt == 4:
-                return [], False, not isinstance(exc, (ValueError, KeyError))
-            if _is_quota_error(exc):
-                wait = 65 + (attempt - 1) * 15
-                logging.warning(f"  429 quota — chờ {wait}s (attempt {attempt}/4) | {url}")
-                time.sleep(wait)
-            else:
-                wait = 3 * (2 ** (attempt - 1))
-                logging.warning(f"  Lỗi tạm thời, retry {attempt}/4 sau {wait}s | {url}")
-                time.sleep(wait)
-
-    return [], False, True
-
+def get_sheet_data(client, url, sheet_name, schema, error_log):
+    try:
+        sheet = client.open_by_url(url)
+        ws = client.worksheet(sheet, sheet_name)
+        rows = read_worksheet_with_retry(ws, schema)
+        logging.info(f"✅ {sheet_name} từ {url}")
+        return rows
+    except gspread.exceptions.WorksheetNotFound:
+        logging.error(f"❌ Không tìm thấy sheet {sheet_name} trong {url}")
+    except Exception as e:
+        logging.error(f"❌ Lỗi sheet {sheet_name} từ {url}: {e}")
+        error_log.append((url, sheet_name))
+    return []
 
 # =========================
-# SHEET TRACKER
+# FETCH SONG SONG
 # =========================
-class SheetTracker:
-    SUCCESS = "✅ success"
-    FAILED  = "❌ failed"
-    SKIPPED = "⏭️  skipped"
-
-    def __init__(self):
-        self._status:      dict[str, str] = {}   # key = url
-        self._retry_count: dict[str, int] = {}
-        self._lock = threading.Lock()
-
-    def mark(self, url: str, status: str):
-        with self._lock:
-            self._status[url] = status
-
-    def increment_retry(self, url: str):
-        with self._lock:
-            self._retry_count[url] = self._retry_count.get(url, 0) + 1
-
-    def retries(self, url: str) -> int:
-        return self._retry_count.get(url, 0)
-
-    def print_report(self, total: int):
-        s = {self.SUCCESS: 0, self.FAILED: 0, self.SKIPPED: 0}
-        for v in self._status.values():
-            s[v] = s.get(v, 0) + 1
-        logging.info(
-            f"━━ KẾT QUẢ: {s[self.SUCCESS]}/{total} files OK | "
-            f"{s[self.FAILED]} lỗi | {s[self.SKIPPED]} skipped ━━"
-        )
-        for url, st in self._status.items():
-            if st != self.SUCCESS:
-                n = self._retry_count.get(url, 0)
-                retry_str = f" (retried {n}x)" if n else ""
-                logging.warning(f"  {st}{retry_str} | {url}")
-
-    def export_csv(self):
-        filename = f"sheet_status_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        with open(filename, "w", newline="", encoding="utf-8") as f:
-            w = csv.writer(f)
-            w.writerow(["url", "status", "retried"])
-            for url, st in sorted(self._status.items(), key=lambda x: x[1]):
-                n = self._retry_count.get(url, 0)
-                w.writerow([url, st, f"{n}x" if n else "-"])
-        logging.info(f"📋 Status report: {filename}")
-
-
-# =========================
-# PARALLEL FETCH
-# =========================
-def fetch_all_spreadsheets(
-    client: gspread.Client,
-    file_tasks: list[tuple[str, list[str]]],   # [(url, [sheet_names]), ...]
-    schema: list[str],
-    max_workers: int     = MAX_WORKERS,
-    max_rounds: int      = MAX_RETRY_ROUNDS,
-) -> tuple[pd.DataFrame, SheetTracker]:
-    """
-    file_tasks: mỗi phần tử = (url, [sheet1, sheet2, ...])
-    1 task = 1 file = 1 batchGet API call (thay vì N calls như trước)
-    """
-    tracker  = SheetTracker()
-    all_rows: list[dict] = []
-    pending  = list(file_tasks)
+def fetch_all_sheets(client, sheet_tasks, schema, max_workers=4, max_rounds=5):
+    all_rows = []
+    error_log = sheet_tasks[:]
 
     for round_no in range(1, max_rounds + 1):
-        if not pending:
+        if not error_log:
             break
 
-        logging.info(f"━━ Round {round_no}/{max_rounds} — {len(pending)} files ━━")
-        t_round = time.monotonic()
-        failed_next = []
+        logging.info(f"🔄 Bắt đầu vòng {round_no}, còn {len(error_log)} sheet lỗi cần retry")
+        current_errors = []
 
-        iterator = tqdm(pending, desc=f"Round {round_no}", unit="file") if HAS_TQDM else pending
-
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
-                pool.submit(_fetch_spreadsheet, client, url, names, schema): url
-                for url, names in iterator
+                executor.submit(get_sheet_data, client, url, name, schema, current_errors): (url, name)
+                for url, name in error_log
             }
             for future in as_completed(futures):
-                url = futures[future]
-                rows, success, retryable = future.result()
-
-                if success:
+                try:
+                    rows = future.result()
                     all_rows.extend(rows)
-                    tracker.mark(url, SheetTracker.SUCCESS)
-                elif not retryable:
-                    tracker.mark(url, SheetTracker.SKIPPED)
-                else:
-                    tracker.increment_retry(url)
-                    # tìm lại names từ pending để retry
-                    names = next(n for u, n in pending if u == url)
-                    failed_next.append((url, names))
+                except Exception as e:
+                    url, name = futures[future]
+                    logging.error(f"❌ Task fail {name} trong {url}: {e}")
+                    current_errors.append((url, name))
 
-        round_elapsed = time.monotonic() - t_round
-        ok_this_round = len([u for u, _ in (file_tasks if round_no == 1 else []) ]) - len(failed_next)
-        logging.info(
-            f"  Round {round_no} xong: {round_elapsed:.1f}s | "
-            f"{len(failed_next)} files lỗi còn lại"
-        )
-        pending = failed_next
-        if pending:
-            backoff = min(10 * round_no, 90)
-            logging.warning(f"  ↻ {len(pending)} files lỗi — chờ {backoff}s rồi retry…")
-            time.sleep(backoff)
+        error_log = current_errors
+        if error_log:
+            sleep_time = 5 * round_no
+            logging.warning(f"⚠️ Vẫn còn {len(error_log)} sheet lỗi, chờ {sleep_time}s rồi retry...")
+            time.sleep(sleep_time)
 
-    for url, _ in pending:
-        tracker.mark(url, SheetTracker.FAILED)
+    if error_log:
+        logging.error(f"❌ Sau {max_rounds} vòng vẫn còn {len(error_log)} sheet lỗi:")
+        for url, name in error_log:
+            logging.error(f"   - {url} :: {name}")
 
-    tracker.print_report(len(file_tasks))
-    tracker.export_csv()
-
-    df = (
-        pd.DataFrame.from_records(all_rows, columns=schema)
-        if all_rows else pd.DataFrame(columns=schema)
-    )
-    return df, tracker
-
+    df_all = pd.DataFrame.from_records(all_rows, columns=schema)
+    return df_all, error_log
 
 # =========================
-# CLEAN / NORMALISE
+# CLEAN DATA
 # =========================
-def normalize_dates(df: pd.DataFrame, date_cols: list[str]) -> pd.DataFrame:
+def normalize_dates(df, date_cols):
+    # Chuẩn hoá các cột ngày
     for col in date_cols:
-        df[col] = df[col].apply(try_parsing_date).dt.strftime('%Y-%m-%d').fillna("")
+        df[col] = df[col].apply(try_parsing_date).dt.strftime('%Y-%m-%d')
+        df[col] = df[col].fillna("")
 
-    action_cols = ["recruiter_call", "hm_interview", "offering", "accept", "onboard"]
-    for col in action_cols:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-
+    # Chuẩn hoá ticket_id
+    action = ["recruiter_call","hm_interview","offering","accept","onboard"]
+    for c in action:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
     df["ticket_id"] = pd.to_numeric(df.get("ticket_id", 0), errors="coerce").fillna(0)
-    mask = df["ticket_id"] < 20
-    df.loc[mask, "ticket_id"] = df.loc[mask, action_cols].sum(axis=1)
+    df.loc[df["ticket_id"] < 20, "ticket_id"] = df.loc[df["ticket_id"] < 20, action].sum(axis=1)
 
+    # Chuẩn hoá phone: chỉ giữ 9 số cuối
     if "phone" in df.columns:
-        df["phone"] = (
-            df["phone"].astype(str)
-                       .str.replace(r"\D", "", regex=True)
-                       .str[-9:]
-                       .replace({"nan": "", "NaN": "", "None": ""})
-                       .fillna("")
-        )
+        df["phone"] = df["phone"].astype(str).str.replace(r"\D", "", regex=True)  # chỉ giữ số
+        df["phone"] = df["phone"].str[-9:]                                        # lấy 9 số cuối
+        df["phone"] = df["phone"].replace(["nan", "NaN", "None"], "").fillna("")
 
-    required_keys = {"phone", "pic", "position", "ticket_id"}
-    if required_keys.issubset(df.columns):
-        df["id_code"] = df.get("id_code", "").fillna("").astype(str).str.strip()
-        df["_has_id"] = (df["id_code"].str.len() > 0).astype(int)
-        df = (
-            df.sort_values(["_has_id", "ticket_id"], ascending=[False, False])
-              .drop_duplicates(subset=["phone", "pic", "position"], keep="first")
-              .drop(columns=["_has_id"])
-              .reset_index(drop=True)
-        )
+    # Lọc trùng theo phone + pic + position (ưu tiên id_code, nếu không có id_code thì ticket_id lớn nhất)
+    required_cols = {"phone", "pic", "position", "ticket_id"}
+    if required_cols.issubset(df.columns):
+        if "id_code" not in df.columns:
+            df["id_code"] = ""
+        df["id_code"] = df["id_code"].fillna("").astype(str).str.strip()
+
+        selected_idx = []
+        for _, group in df.groupby(["phone", "pic", "position"], sort=False):
+            group_id_code = group[group["id_code"].str.len() > 0]
+            if not group_id_code.empty:
+                # lấy bản ghi id_code có ticket_id lớn nhất
+                keep_idx = group_id_code["ticket_id"].idxmax()
+            else:
+                # không có id_code, lấy bản ghi có ticket_id lớn nhất
+                keep_idx = group["ticket_id"].idxmax()
+            selected_idx.append(keep_idx)
+
+        df = df.loc[selected_idx].reset_index(drop=True)
+
     return df
-
-
-# =========================
-# WRITE TO MASTER
-# =========================
-def write_master(client: gspread.Client, df: pd.DataFrame):
-    master_ss = client.open_by_url(MASTER_SPREADSHEET_URL)
-    ws = master_ss.worksheet("Productivity")
-    values = [df.columns.tolist()] + df.astype(str).values.tolist()
-
-    _write_limiter.acquire()
-    ws.clear()
-    _write_limiter.acquire()
-    ws.batch_update(
-        [
-            {"range": "A1",      "values": values},
-            {"range": "AR1:AS1", "values": [["channel_by_prod", "team"]]},
-            {"range": "AR2",     "values": [["=ARRAYFORMULA(IFNA(XLOOKUP(D2:D,Source!$A:$A,Source!$C:$C)))"]]},
-            {"range": "AS2",     "values": [["=ARRAYFORMULA(IFNA(XLOOKUP(AO2:AO,Info!$C:$C,Info!$N:$N)))"]]},
-        ],
-        value_input_option="USER_ENTERED",
-    )
-    logging.info(f"✅ Written {len(df)} rows to Master")
-
 
 # =========================
 # MAIN
 # =========================
 def main():
-    t0 = time.time()
-    client = authenticate()
+    client = GSpreadClientWithCache(authenticate_gspread())
 
-    logging.info(
-        f"Config — read: {_read_limiter} | write: {_write_limiter} | workers: {MAX_WORKERS}"
-    )
+    # đọc danh sách link
+    link_spreadsheet = client.open_by_url(LINK_SPREADSHEET_URL)
+    ws_links = client.worksheet(link_spreadsheet, "Productivity File")
+    data_links = ws_links.get_all_records()
+    df_links = pd.DataFrame(data_links)
 
-    # Đọc danh sách link
-    link_ss  = client.open_by_url(LINK_SPREADSHEET_URL)
-    ws_links = link_ss.worksheet("Productivity File")
-    df_links = pd.DataFrame(ws_links.get_all_records())
+    if not all(c in df_links.columns for c in REQUIRED_COLS):
+        raise Exception("Thiếu cột trong Productivity File")
 
-    missing = [c for c in REQUIRED_COLS if c not in df_links.columns]
-    if missing:
-        raise ValueError(f"Thiếu cột: {missing}")
+    # tạo tasks
+    sheet_tasks = []
+    for url, names in zip(df_links["Link"], df_links[REQUIRED_COLS[1:]].values.tolist()):
+        if url and isinstance(url, str) and url.strip():
+            for name in filter(None, names):
+                sheet_tasks.append((url, name))
 
-    # Gom sheet names theo từng URL → 1 file = 1 task
-    from collections import defaultdict
-    file_map: dict[str, list[str]] = defaultdict(list)
-    for _, row in df_links.iterrows():
-        url = str(row.get("Link", "")).strip()
-        if not url:
-            continue
-        for col in REQUIRED_COLS[1:]:
-            name = str(row.get(col, "")).strip()
-            if name:
-                file_map[url].append(name)
+    logging.info(f"🔄 Tổng cộng {len(sheet_tasks)} sheet")
 
-    file_tasks = [(url, names) for url, names in file_map.items()]
-    total_sheets = sum(len(n) for _, n in file_tasks)
-    logging.info(
-        f"Tổng: {len(file_tasks)} files | {total_sheets} sheets | "
-        f"API calls: {len(file_tasks)} (batchGet) thay vì {total_sheets} (trước đây)"
-    )
+    # lấy data song song
+    all_data, error_log = fetch_all_sheets(client, sheet_tasks, SCHEMA, max_workers=6)
 
-    # Fetch
-    all_data, tracker = fetch_all_spreadsheets(
-        client, file_tasks, SCHEMA, max_workers=MAX_WORKERS
-    )
-    logging.info(f"Fetched {len(all_data)} raw rows")
+    if error_log:
+        logging.warning(f"🔄 Thử chạy lại {len(error_log)} sheet lỗi")
+        retry_data, retry_error = fetch_all_sheets(client, error_log, SCHEMA, max_workers=4)
+        all_data = pd.concat([all_data, retry_data], ignore_index=True)
+        if retry_error:
+            logging.error(f"⚠️ Vẫn còn {len(retry_error)} sheet lỗi sau khi retry: {retry_error}")
 
-    # Clean
     all_data = normalize_dates(all_data, DATE_COLS)
     all_data.replace([float("inf"), float("-inf")], "", inplace=True)
     all_data.fillna("", inplace=True)
 
-    # Write
-    write_master(client, all_data)
+    # ghi vào Master
+    master_spreadsheet = client.open_by_url(MASTER_SPREADSHEET_URL)
+    ws_master = client.worksheet(master_spreadsheet, "Productivity")
 
-    elapsed = time.time() - t0
-    logging.info(f"✅ DONE trong {elapsed:.1f}s — {len(all_data)} rows")
+    values = [all_data.columns.tolist()] + all_data.values.tolist()
 
+    rate_limit_write()
+    ws_master.clear()
+    ws_master.batch_update([
+        {"range": "A1", "values": values},
+        {"range": "AR1:AS1", "values": [["channel_by_prod", "team"]]},
+        {"range": "AR2", "values": [["=ARRAYFORMULA(IFNA(XLOOKUP(D2:D,Source!$A:$A,Source!$C:$C)))"]]},
+        {"range": "AS2", "values": [["=ARRAYFORMULA(IFNA(XLOOKUP(AO2:AO,Info!$C:$C,Info!$N:$N)))"]]}
+    ], value_input_option="USER_ENTERED")
+
+    logging.info("✅ DONE")
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
+
+
+

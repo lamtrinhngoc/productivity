@@ -10,7 +10,6 @@ from datetime import datetime
 import gspread
 import pandas as pd
 from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
 
 try:
     from tqdm import tqdm
@@ -31,7 +30,7 @@ SCOPES = [
 ]
 
 LINK_SPREADSHEET_URL  = "https://docs.google.com/spreadsheets/d/10eMZVnmtyyr5JAzDvpE5Brgh-8fw3lEKmGvL5m6eCUY"
-MASTER_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1VlXicEr1FGrpdDcRpuv1aE2TAG-7QHEfWKNtFJF4nc8"
+MASTER_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/17rB2UiQ_tUdl4eX4nbOllq2_XDe3bBFA4RIoiv7v3lc/edit?gid=0#gid=0"
 
 REQUIRED_COLS = ["Link", "Sheet 1", "Sheet 2", "Sheet 3", "Sheet 4", "Sheet 5"]
 
@@ -122,11 +121,9 @@ _write_limiter = RateLimiter(SAFE_WRITE_RPM)
 # AUTH
 # =========================
 def authenticate():
-    """Trả về (gspread_client, sheets_v4_service) dùng chung credentials."""
+    """Trả về gspread client."""
     creds = Credentials.from_service_account_file("credentials.json", scopes=SCOPES)
-    gs_client     = gspread.authorize(creds)
-    sheets_service = build("sheets", "v4", credentials=creds, cache_discovery=False)
-    return gs_client, sheets_service
+    return gspread.authorize(creds)
 
 # =========================
 # UTILS
@@ -158,37 +155,26 @@ def _spreadsheet_id_from_url(url: str) -> str:
 # CORE: batchGet — 1 API call lấy nhiều sheets cùng lúc
 # =========================
 def _batch_get_sheets(
-    service,
-    spreadsheet_id: str,
+    spreadsheet,
     sheet_names: list[str],
     data_range: str = "B8:AR",
 ) -> dict[str, list]:
     """
-    Dùng spreadsheets.values.batchGet để lấy nhiều sheet ranges trong 1 HTTP call.
-
-    Trước: N sheets = N API calls
-    Sau:   N sheets = 1 API call  ← đây là chìa khoá tối ưu
+    Dùng gspread values_batch_get() — 1 HTTP call lấy nhiều sheets.
+    Dùng gspread values_batch_get — không cần cài thêm package.
 
     Returns: {sheet_name: [[row], [row], ...]}
     """
     ranges = [f"'{name}'!{data_range}" for name in sheet_names]
     _read_limiter.acquire()
     t_net = time.monotonic()
-    result = (
-        service.spreadsheets()
-               .values()
-               .batchGet(
-                   spreadsheetId=spreadsheet_id,
-                   ranges=ranges,
-                   valueRenderOption="FORMATTED_VALUE",
-                   dateTimeRenderOption="FORMATTED_STRING",
-               )
-               .execute()
+    result = spreadsheet.values_batch_get(
+        ranges=ranges,
+        params={"valueRenderOption": "FORMATTED_VALUE", "dateTimeRenderOption": "FORMATTED_STRING"},
     )
-    logging.debug(f"[network] batchGet {len(sheet_names)} sheets = {time.monotonic()-t_net:.2f}s | {spreadsheet_id}")
+    logging.debug(f"[network] batchGet {len(sheet_names)} sheets = {time.monotonic()-t_net:.2f}s | {spreadsheet.id}")
     out = {}
     for vr in result.get("valueRanges", []):
-        # range trả về dạng "'Sheet Name'!B8:AR" → trích tên sheet
         raw_range = vr.get("range", "")
         sheet_name = raw_range.split("!")[0].strip("'")
         out[sheet_name] = vr.get("values", [])
@@ -208,9 +194,7 @@ def _parse_sheet_data(rows: list[list], schema: list[str]) -> list[dict]:
 
 
 def _is_quota_error(exc: Exception) -> bool:
-    if hasattr(exc, "resp"):                          # googleapiclient error
-        return int(getattr(exc.resp, "status", 0)) == 429
-    if isinstance(exc, gspread.exceptions.APIError):  # gspread error
+    if isinstance(exc, gspread.exceptions.APIError):
         resp = getattr(exc, "response", None)
         return getattr(resp, "status_code", 0) == 429
     return False
@@ -220,7 +204,7 @@ def _is_quota_error(exc: Exception) -> bool:
 # FETCH TASK — 1 file = 1 task = 1 API call (batchGet)
 # =========================
 def _fetch_spreadsheet(
-    service,
+    client: gspread.Client,
     url: str,
     sheet_names: list[str],
     schema: list[str],
@@ -230,15 +214,16 @@ def _fetch_spreadsheet(
 
     Returns: (rows, success, retryable)
     """
-    ss_id = _spreadsheet_id_from_url(url)
     t_file = time.monotonic()
     for attempt in range(1, 5):
         try:
-            raw = _batch_get_sheets(service, ss_id, sheet_names)
+            _read_limiter.acquire()  # acquire cho open_by_url
+            ss  = client.open_by_url(url)
+            raw = _batch_get_sheets(ss, sheet_names)
             rows = []
             for name in sheet_names:
                 rows.extend(_parse_sheet_data(raw.get(name, []), schema))
-            logging.debug(f"[file_ok] {len(rows)} rows, {len(sheet_names)} sheets, total={time.monotonic()-t_file:.2f}s | {ss_id}")
+            logging.debug(f"[file_ok] {len(rows)} rows, {len(sheet_names)} sheets, total={time.monotonic()-t_file:.2f}s | {url}")
             return rows, True, False
 
         except Exception as exc:
@@ -309,7 +294,7 @@ class SheetTracker:
 # PARALLEL FETCH
 # =========================
 def fetch_all_spreadsheets(
-    service,
+    client: gspread.Client,
     file_tasks: list[tuple[str, list[str]]],   # [(url, [sheet_names]), ...]
     schema: list[str],
     max_workers: int     = MAX_WORKERS,
@@ -335,7 +320,7 @@ def fetch_all_spreadsheets(
 
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {
-                pool.submit(_fetch_spreadsheet, service, url, names, schema): url
+                pool.submit(_fetch_spreadsheet, client, url, names, schema): url
                 for url, names in iterator
             }
             for future in as_completed(futures):
@@ -418,8 +403,8 @@ def normalize_dates(df: pd.DataFrame, date_cols: list[str]) -> pd.DataFrame:
 # =========================
 # WRITE TO MASTER
 # =========================
-def write_master(gs_client: gspread.Client, df: pd.DataFrame):
-    master_ss = gs_client.open_by_url(MASTER_SPREADSHEET_URL)
+def write_master(client: gspread.Client, df: pd.DataFrame):
+    master_ss = client.open_by_url(MASTER_SPREADSHEET_URL)
     ws = master_ss.worksheet("Productivity")
     values = [df.columns.tolist()] + df.astype(str).values.tolist()
 
@@ -443,14 +428,14 @@ def write_master(gs_client: gspread.Client, df: pd.DataFrame):
 # =========================
 def main():
     t0 = time.time()
-    gs_client, sheets_service = authenticate()
+    client = authenticate()
 
     logging.info(
         f"Config — read: {_read_limiter} | write: {_write_limiter} | workers: {MAX_WORKERS}"
     )
 
     # Đọc danh sách link
-    link_ss  = gs_client.open_by_url(LINK_SPREADSHEET_URL)
+    link_ss  = client.open_by_url(LINK_SPREADSHEET_URL)
     ws_links = link_ss.worksheet("Productivity File")
     df_links = pd.DataFrame(ws_links.get_all_records())
 
@@ -479,7 +464,7 @@ def main():
 
     # Fetch
     all_data, tracker = fetch_all_spreadsheets(
-        sheets_service, file_tasks, SCHEMA, max_workers=MAX_WORKERS
+        client, file_tasks, SCHEMA, max_workers=MAX_WORKERS
     )
     logging.info(f"Fetched {len(all_data)} raw rows")
 
@@ -489,7 +474,7 @@ def main():
     all_data.fillna("", inplace=True)
 
     # Write
-    write_master(gs_client, all_data)
+    write_master(client, all_data)
 
     elapsed = time.time() - t0
     logging.info(f"✅ DONE trong {elapsed:.1f}s — {len(all_data)} rows")

@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 
 LINK_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/10eMZVnmtyyr5JAzDvpE5Brgh-8fw3lEKmGvL5m6eCUY"
-MASTER_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1VlXicEr1FGrpdDcRpuv1aE2TAG-7QHEfWKNtFJF4nc8"
+MASTER_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/17rB2UiQ_tUdl4eX4nbOllq2_XDe3bBFA4RIoiv7v3lc/edit?gid=0#gid=0"
 
 REQUIRED_COLS = ["Link", "Sheet 1", "Sheet 2", "Sheet 3", "Sheet 4", "Sheet 5"]
 
@@ -42,7 +42,7 @@ DATE_COLS = [
 # =========================
 # TOKEN BUCKET RATE LIMITER
 # =========================
-READ_RATE_LIMIT = int(os.getenv("GSHEETS_READ_RPM", "56"))   # 55 để có buffer
+READ_RATE_LIMIT = int(os.getenv("GSHEETS_READ_RPM", "56"))
 WRITE_RATE_LIMIT = int(os.getenv("GSHEETS_WRITE_RPM", "56"))
 WINDOW = 60.0
 
@@ -138,7 +138,7 @@ def read_worksheet_with_retry(ws, schema):
     df.columns = schema[:len(df.columns)]
     df = df.reindex(columns=schema).fillna("")
     df["date_update"] = df['date_update'].apply(try_parsing_date)
-    df = df[df["date_update"] >= pd.Timestamp("2025-01-01")]
+    df = df[df["date_update"] >= pd.Timestamp("2025-07-01")]
     return df.to_dict("records")
 
 def get_sheet_data(client, url, sheet_name, schema, error_log):
@@ -201,25 +201,21 @@ def fetch_all_sheets(client, sheet_tasks, schema, max_workers=4, max_rounds=5):
 # CLEAN DATA
 # =========================
 def normalize_dates(df, date_cols):
-    # Chuẩn hoá các cột ngày
     for col in date_cols:
         df[col] = df[col].apply(try_parsing_date).dt.strftime('%Y-%m-%d')
         df[col] = df[col].fillna("")
 
-    # Chuẩn hoá ticket_id
     action = ["recruiter_call","hm_interview","offering","accept","onboard"]
     for c in action:
         df[c] = pd.to_numeric(df[c], errors="coerce")
     df["ticket_id"] = pd.to_numeric(df.get("ticket_id", 0), errors="coerce").fillna(0)
     df.loc[df["ticket_id"] < 20, "ticket_id"] = df.loc[df["ticket_id"] < 20, action].sum(axis=1)
 
-    # Chuẩn hoá phone: chỉ giữ 9 số cuối
     if "phone" in df.columns:
-        df["phone"] = df["phone"].astype(str).str.replace(r"\D", "", regex=True)  # chỉ giữ số
-        df["phone"] = df["phone"].str[-9:]                                        # lấy 9 số cuối
+        df["phone"] = df["phone"].astype(str).str.replace(r"\D", "", regex=True)
+        df["phone"] = df["phone"].str[-9:]
         df["phone"] = df["phone"].replace(["nan", "NaN", "None"], "").fillna("")
 
-    # Lọc trùng theo phone + pic + position (ưu tiên id_code, nếu không có id_code thì ticket_id lớn nhất)
     required_cols = {"phone", "pic", "position", "ticket_id"}
     if required_cols.issubset(df.columns):
         if "id_code" not in df.columns:
@@ -230,10 +226,8 @@ def normalize_dates(df, date_cols):
         for _, group in df.groupby(["phone", "pic", "position"], sort=False):
             group_id_code = group[group["id_code"].str.len() > 0]
             if not group_id_code.empty:
-                # lấy bản ghi id_code có ticket_id lớn nhất
                 keep_idx = group_id_code["ticket_id"].idxmax()
             else:
-                # không có id_code, lấy bản ghi có ticket_id lớn nhất
                 keep_idx = group["ticket_id"].idxmax()
             selected_idx.append(keep_idx)
 
@@ -247,7 +241,6 @@ def normalize_dates(df, date_cols):
 def main():
     client = GSpreadClientWithCache(authenticate_gspread())
 
-    # đọc danh sách link
     link_spreadsheet = client.open_by_url(LINK_SPREADSHEET_URL)
     ws_links = client.worksheet(link_spreadsheet, "Productivity File")
     data_links = ws_links.get_all_records()
@@ -256,7 +249,6 @@ def main():
     if not all(c in df_links.columns for c in REQUIRED_COLS):
         raise Exception("Thiếu cột trong Productivity File")
 
-    # tạo tasks
     sheet_tasks = []
     for url, names in zip(df_links["Link"], df_links[REQUIRED_COLS[1:]].values.tolist()):
         if url and isinstance(url, str) and url.strip():
@@ -265,7 +257,6 @@ def main():
 
     logging.info(f"🔄 Tổng cộng {len(sheet_tasks)} sheet")
 
-    # lấy data song song
     all_data, error_log = fetch_all_sheets(client, sheet_tasks, SCHEMA, max_workers=6)
 
     if error_log:
@@ -279,7 +270,6 @@ def main():
     all_data.replace([float("inf"), float("-inf")], "", inplace=True)
     all_data.fillna("", inplace=True)
 
-    # ghi vào Master
     master_spreadsheet = client.open_by_url(MASTER_SPREADSHEET_URL)
     ws_master = client.worksheet(master_spreadsheet, "Productivity")
 
@@ -298,12 +288,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
-

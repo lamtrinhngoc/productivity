@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 
 LINK_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/10eMZVnmtyyr5JAzDvpE5Brgh-8fw3lEKmGvL5m6eCUY"
-MASTER_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/17rB2UiQ_tUdl4eX4nbOllq2_XDe3bBFA4RIoiv7v3lc/edit?gid=0#gid=0"
+MASTER_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1VlXicEr1FGrpdDcRpuv1aE2TAG-7QHEfWKNtFJF4nc8"
 
 REQUIRED_COLS = ["Link", "Sheet 1", "Sheet 2", "Sheet 3", "Sheet 4", "Sheet 5"]
 
@@ -288,3 +288,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

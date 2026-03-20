@@ -9,7 +9,10 @@ import gspread
 import pandas as pd
 from google.oauth2.service_account import Credentials
 from requests.exceptions import JSONDecodeError
-from tenacity import retry, wait_fixed, stop_after_attempt, retry_if_exception_type
+from tenacity import (
+    retry, wait_exponential, wait_random, stop_after_attempt,
+    retry_if_exception, before_sleep_log
+)
 
 # =========================
 # CONFIG
@@ -69,6 +72,26 @@ def rate_limit_write():
     _acquire_token(_write_tokens, WRITE_RATE_LIMIT, "WRITE")
 
 # =========================
+# RETRY HELPERS
+# =========================
+def is_retryable_api_error(exc):
+    """Retry on 429 (quota), 500, 502, 503 (transient server errors)."""
+    if isinstance(exc, gspread.exceptions.APIError):
+        code = exc.response.status_code
+        return code in (429, 500, 502, 503)
+    if isinstance(exc, JSONDecodeError):
+        return True
+    return False
+
+RETRY_POLICY = dict(
+    retry=retry_if_exception(is_retryable_api_error),
+    wait=wait_exponential(multiplier=1, min=3, max=60) + wait_random(0, 2),
+    stop=stop_after_attempt(5),
+    before_sleep=before_sleep_log(logging.getLogger(), logging.WARNING),
+    reraise=True,
+)
+
+# =========================
 # AUTH + CLIENT CACHE
 # =========================
 def authenticate_gspread():
@@ -82,6 +105,7 @@ class GSpreadClientWithCache:
         self._ws_cache = {}
         self._lock = threading.Lock()
 
+    @retry(**RETRY_POLICY)
     def open_by_url(self, url):
         with self._lock:
             if url not in self._ss_cache:
@@ -89,6 +113,7 @@ class GSpreadClientWithCache:
                 self._ss_cache[url] = self.client.open_by_url(url)
             return self._ss_cache[url]
 
+    @retry(**RETRY_POLICY)
     def worksheet(self, spreadsheet, name: str):
         key = (spreadsheet.id, name)
         with self._lock:
@@ -124,12 +149,7 @@ def try_parsing_date(text):
 # =========================
 # READ SHEETS (retry)
 # =========================
-@retry(
-    wait=wait_fixed(3),
-    stop=stop_after_attempt(3),
-    retry=retry_if_exception_type((gspread.exceptions.APIError, JSONDecodeError)),
-    reraise=True
-)
+@retry(**RETRY_POLICY)
 def read_worksheet_with_retry(ws, schema):
     data = safe_get_range(ws, "B8:AR")
     if not data:
@@ -236,6 +256,23 @@ def normalize_dates(df, date_cols):
     return df
 
 # =========================
+# WRITE MASTER (retry)
+# =========================
+@retry(**RETRY_POLICY)
+def write_master(ws_master, values):
+    rate_limit_write()
+    ws_master.clear()
+    ws_master.batch_update(
+        [
+            {"range": "A1", "values": values},
+            {"range": "AR1:AS1", "values": [["channel_by_prod", "team"]]},
+            {"range": "AR2", "values": [["=ARRAYFORMULA(IFNA(XLOOKUP(D2:D,Source!$A:$A,Source!$C:$C)))"]]},
+            {"range": "AS2", "values": [["=ARRAYFORMULA(IFNA(XLOOKUP(AO2:AO,Info!$C:$C,Info!$N:$N)))"]]}
+        ],
+        value_input_option="USER_ENTERED",
+    )
+
+# =========================
 # MAIN
 # =========================
 def main():
@@ -275,17 +312,9 @@ def main():
 
     values = [all_data.columns.tolist()] + all_data.values.tolist()
 
-    rate_limit_write()
-    ws_master.clear()
-    ws_master.batch_update([
-        {"range": "A1", "values": values},
-        {"range": "AR1:AS1", "values": [["channel_by_prod", "team"]]},
-        {"range": "AR2", "values": [["=ARRAYFORMULA(IFNA(XLOOKUP(D2:D,Source!$A:$A,Source!$C:$C)))"]]},
-        {"range": "AS2", "values": [["=ARRAYFORMULA(IFNA(XLOOKUP(AO2:AO,Info!$C:$C,Info!$N:$N)))"]]}
-    ], value_input_option="USER_ENTERED")
+    write_master(ws_master, values)
 
     logging.info("✅ DONE")
 
 if __name__ == "__main__":
     main()
-

@@ -332,7 +332,7 @@ def write_master(ws_master, values: list):
 
     for row in values:
         row_str = [("" if (c is None or c != c) else c) for c in row]
-        row_bytes = sum(len(s.encode("utf-8")) for s in row_str)
+        row_bytes = sum(len(str(s).encode("utf-8")) for s in row_str)
 
         if current_block and current_size + row_bytes > BLOCK_BYTES_LIMIT:
             end_row = row_pointer + len(current_block) - 1

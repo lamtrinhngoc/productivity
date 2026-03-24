@@ -255,22 +255,58 @@ def normalize_dates(df, date_cols):
 
     return df
 
-# =========================
-# WRITE MASTER (retry)
-# =========================
+# ========================= WRITE (FIXED) =========================
 @retry(**RETRY_POLICY)
 def write_master(ws_master, values):
+
     rate_limit_write()
-    ws_master.clear()
-    ws_master.batch_update(
-        [
-            {"range": "A1", "values": values},
-            {"range": "AR1:AS1", "values": [["channel_by_prod", "team"]]},
-            {"range": "AR2", "values": [["=ARRAYFORMULA(IFNA(XLOOKUP(D2:D,Source!$A:$A,Source!$C:$C)))"]]},
-            {"range": "AS2", "values": [["=ARRAYFORMULA(IFNA(XLOOKUP(AO2:AO,Info!$C:$C,Info!$N:$N)))"]]}
-        ],
-        value_input_option="USER_ENTERED",
+
+    logging.info(f"🚀 Writing {len(values)-1} rows to master")
+
+    ws_master.batch_clear(["A:AZ"])
+
+    header = values[0]
+    ws_master.update("A1", [header], value_input_option="RAW")
+
+    data = values[1:]
+    BLOCK_SIZE = 20000
+
+    total_blocks = math.ceil(len(data) / BLOCK_SIZE)
+    row_pointer = 2
+
+    for i in range(total_blocks):
+        block = data[i * BLOCK_SIZE:(i + 1) * BLOCK_SIZE]
+
+        logging.info(f"📦 Block {i+1}/{total_blocks}")
+
+        ws_master.update(
+            f"A{row_pointer}",
+            block,
+            value_input_option="RAW"
+        )
+
+        row_pointer += len(block)
+
+    logging.info("⚡ Adding formulas")
+
+    ws_master.update(
+        "AR1:AS1",
+        [["channel_by_prod", "team"]],
+        value_input_option="RAW"
     )
+
+    ws_master.update(
+        "AR2",
+        [["=ARRAYFORMULA(IFNA(XLOOKUP(D2:D,Source!$A:$A,Source!$C:$C)))"]],
+        value_input_option="USER_ENTERED"
+    )
+
+    ws_master.update(
+        "AS2",
+        [["=ARRAYFORMULA(IFNA(XLOOKUP(AO2:AO,Info!$C:$C,Info!$N:$N)))"]],
+        value_input_option="USER_ENTERED"
+    )
+
 
 # =========================
 # MAIN

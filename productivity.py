@@ -274,8 +274,8 @@ def normalize_dates(df: pd.DataFrame, date_cols: list) -> pd.DataFrame:
 
     action = ["recruiter_call", "hm_interview", "offering", "accept", "onboard"]
     for c in action:
-        df[c] = pd.to_numeric(df[c], errors="coerce").astype(int)
-    df["ticket_id"] = pd.to_numeric(df.get("ticket_id", 0), errors="coerce").fillna(0).astype(int)
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    df["ticket_id"] = pd.to_numeric(df.get("ticket_id", 0), errors="coerce").fillna(0)
     df.loc[df["ticket_id"] < 20, "ticket_id"] = df.loc[df["ticket_id"] < 20, action].sum(axis=1)
 
     if "phone" in df.columns:
@@ -331,7 +331,7 @@ def write_master(ws_master, values: list):
     current_size  = 0
 
     for row in values:
-        row_str   = [str(c) for c in row]
+        row_str = [("" if (c is None or c != c) else c) for c in row]
         row_bytes = sum(len(s.encode("utf-8")) for s in row_str)
 
         if current_block and current_size + row_bytes > BLOCK_BYTES_LIMIT:
@@ -356,7 +356,7 @@ def write_master(ws_master, values: list):
             f"({len(current_block)} rows, {current_size / 1024:.1f} KB) [final]"
         )
         rate_limit_write()
-        ws_master.update(f"A{row_pointer}", current_block, value_input_option="RAW")
+        ws_master.update(f"A{row_pointer}", current_block, value_input_option="USER_ENTERED")
 
     # 3. Formulas — 3 original calls collapsed into 1 batch_update
     logger.info("  ⚡ Writing formula columns (1 batch call)")

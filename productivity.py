@@ -274,8 +274,8 @@ def normalize_dates(df: pd.DataFrame, date_cols: list) -> pd.DataFrame:
 
     action = ["recruiter_call", "hm_interview", "offering", "accept", "onboard"]
     for c in action:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
-    df["ticket_id"] = pd.to_numeric(df.get("ticket_id", 0), errors="coerce").fillna(0)
+        df[c] = pd.to_numeric(df[c], errors="coerce").astype(int)
+    df["ticket_id"] = pd.to_numeric(df.get("ticket_id", 0), errors="coerce").fillna(0).astype(int)
     df.loc[df["ticket_id"] < 20, "ticket_id"] = df.loc[df["ticket_id"] < 20, action].sum(axis=1)
 
     if "phone" in df.columns:

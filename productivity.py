@@ -50,8 +50,8 @@ FILTER_DATE_FROM = pd.Timestamp(os.getenv("FILTER_DATE_FROM", "2025-07-01"))
 # =========================
 # TOKEN BUCKET RATE LIMITER
 # =========================
-READ_RATE_LIMIT  = int(os.getenv("GSHEETS_READ_RPM",  "30"))
-WRITE_RATE_LIMIT = int(os.getenv("GSHEETS_WRITE_RPM", "30"))
+READ_RATE_LIMIT  = int(os.getenv("GSHEETS_READ_RPM",  "40"))
+WRITE_RATE_LIMIT = int(os.getenv("GSHEETS_WRITE_RPM", "40"))
 WINDOW = 60.0
 
 _read_tokens  = deque()
@@ -412,7 +412,7 @@ def main():
 
     # --- Fetch all sheets (built-in retry rounds, full per-sheet logging) ---
     all_data, permanently_failed = fetch_all_sheets(
-        client, sheet_tasks, SCHEMA, max_workers=3, max_rounds=5
+        client, sheet_tasks, SCHEMA, max_workers=4, max_rounds=5
     )
 
     if permanently_failed:

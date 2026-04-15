@@ -91,11 +91,13 @@ DATE_COLS = [
     "onboard_date",
 ]
 
-FILTER_DATE_FROM = pd.Timestamp(os.getenv("FILTER_DATE_FROM", "2025-07-01"))
-OVERLAP_HOURS = int(os.getenv("OVERLAP_HOURS", "24"))
+GLOBAL_CUTOFF_DATE = "2025-07-01"
+FILTER_DATE_FROM = pd.Timestamp(GLOBAL_CUTOFF_DATE)
 VOLATILE_SOURCE_ROW = int(os.getenv("VOLATILE_SOURCE_ROW", "2"))
-VOLATILE_LOOKBACK_HOURS = int(os.getenv("VOLATILE_LOOKBACK_HOURS", "72"))
-STATE_WORKSHEET_NAME = os.getenv("STATE_WORKSHEET_NAME", "_IngestionState")
+VOLATILE_STABLE_WAIT_SECONDS = int(os.getenv("VOLATILE_STABLE_WAIT_SECONDS", "15"))
+VOLATILE_MAX_ROUNDS = int(os.getenv("VOLATILE_MAX_ROUNDS", "5"))
+SOURCE_MAX_ROUNDS = int(os.getenv("SOURCE_MAX_ROUNDS", "3"))
+SOURCE_RETRY_WAIT_SECONDS = int(os.getenv("SOURCE_RETRY_WAIT_SECONDS", "10"))
 
 MAX_WORKERS = int(os.getenv("MAX_WORKERS", "8"))
 DRY_RUN = os.getenv("DRY_RUN", "false").lower() == "true"
@@ -222,13 +224,6 @@ class GSpreadClientWithCache:
 # =========================
 # UTILS
 # =========================
-def utc_now_naive() -> pd.Timestamp:
-    now = pd.Timestamp.utcnow()
-    if getattr(now, "tzinfo", None) is not None:
-        return now.tz_localize(None)
-    return now
-
-
 def try_parsing_date(text):
     if pd.isna(text) or not str(text).strip():
         return pd.NaT
@@ -303,7 +298,7 @@ def col_index_to_a1(col_index: int) -> str:
 
 
 # =========================
-# SOURCE CONFIG + STATE
+# SOURCE CONFIG
 # =========================
 def build_source_tasks(ws_links) -> list:
     rate_limit_read()
@@ -342,70 +337,47 @@ def build_source_tasks(ws_links) -> list:
     return tasks
 
 
-def get_or_create_state_ws(client: GSpreadClientWithCache, master_spreadsheet):
-    try:
-        return client.worksheet(master_spreadsheet, STATE_WORKSHEET_NAME)
-    except gspread.exceptions.WorksheetNotFound:
-        logger.info("State worksheet not found. Creating _IngestionState.")
-        rate_limit_write()
-        ws = master_spreadsheet.add_worksheet(title=STATE_WORKSHEET_NAME, rows=1000, cols=6)
-        rate_limit_write()
-        ws.update("A1", [["source_id", "last_success_at", "is_volatile", "updated_at"]])
-        return ws
+@retry(**RETRY_POLICY)
+def count_source_rows(client: GSpreadClientWithCache, task: SourceTask):
+    spreadsheet = client.open_by_url(task.url)
 
-
-def load_state(ws_state) -> dict:
     rate_limit_read()
-    records = ws_state.get_all_records()
-    state = {}
-    for row in records:
-        source_id = str(row.get("source_id", "")).strip()
-        if not source_id:
-            continue
-        state[source_id] = str(row.get("last_success_at", "")).strip()
-    return state
+    available_sheet_names = {ws.title for ws in spreadsheet.worksheets()}
+    selected_names = [name for name in task.sheet_names if name in available_sheet_names]
+    missing_names = [name for name in task.sheet_names if name not in available_sheet_names]
 
+    for missing in missing_names:
+        logger.warning("[VOLATILE %s] Missing worksheet '%s' while counting", task.source_id, missing)
 
-def compute_source_cutoff(task: SourceTask, state_map: dict) -> pd.Timestamp:
-    global_floor = FILTER_DATE_FROM
-    now = utc_now_naive()
+    if not selected_names:
+        return 0, {}
 
-    if task.is_volatile:
-        volatile_floor = now - pd.Timedelta(hours=VOLATILE_LOOKBACK_HOURS)
-        return max(global_floor, volatile_floor)
+    ranges = ["'{}'!B8:AR".format(name.replace("'", "''")) for name in selected_names]
+    rate_limit_read()
+    response = spreadsheet.values_batch_get(ranges)
+    value_ranges = response.get("valueRanges", [])
 
-    last_success_raw = state_map.get(task.source_id, "")
-    last_success = try_parsing_date(last_success_raw)
-    if pd.isna(last_success):
-        return global_floor
+    total_rows = 0
+    per_sheet_counts = {}
+    for idx, sheet_name in enumerate(selected_names):
+        block = value_ranges[idx] if idx < len(value_ranges) else {}
+        values = block.get("values", [])
+        count = sum(1 for row in values if any(str(cell).strip() for cell in row))
+        per_sheet_counts[sheet_name] = count
+        total_rows += count
+        logger.info("[VOLATILE %s] Count sheet '%s' = %s", task.source_id, sheet_name, count)
 
-    overlap_floor = last_success - pd.Timedelta(hours=OVERLAP_HOURS)
-    return max(global_floor, overlap_floor)
-
-
-def save_state(ws_state, tasks: list, state_map: dict, success_ids: set):
-    now_str = utc_now_naive().strftime("%Y-%m-%d %H:%M:%S")
-    for source_id in success_ids:
-        state_map[source_id] = now_str
-
-    rows = [["source_id", "last_success_at", "is_volatile", "updated_at"]]
-    for task in tasks:
-        rows.append(
-            [task.source_id, state_map.get(task.source_id, ""), "1" if task.is_volatile else "0", now_str]
-        )
-
-    rate_limit_write()
-    ws_state.batch_clear(["A:D"])
-    rate_limit_write()
-    ws_state.update("A1", rows, value_input_option="RAW")
+    logger.info("[VOLATILE %s] Total counted rows = %s", task.source_id, total_rows)
+    return total_rows, per_sheet_counts
 
 
 # =========================
 # EXTRACT
 # =========================
 @retry(**RETRY_POLICY)
-def fetch_source_records(client: GSpreadClientWithCache, task: SourceTask, cutoff: pd.Timestamp) -> FetchResult:
+def fetch_source_records(client: GSpreadClientWithCache, task: SourceTask) -> FetchResult:
     spreadsheet = client.open_by_url(task.url)
+    cutoff = FILTER_DATE_FROM
 
     rate_limit_read()
     available_sheet_names = {ws.title for ws in spreadsheet.worksheets()}
@@ -418,25 +390,44 @@ def fetch_source_records(client: GSpreadClientWithCache, task: SourceTask, cutof
     if not selected_names:
         return FetchResult(task.source_id, True, [], "", 0, "", task.is_volatile)
 
+    logger.info(
+        "[SOURCE %s] Start fetch with cutoff=%s. Sheets=%s",
+        task.source_id,
+        cutoff.strftime("%Y-%m-%d"),
+        ", ".join(selected_names),
+    )
+
     ranges = ["'{}'!B8:AR".format(name.replace("'", "''")) for name in selected_names]
     rate_limit_read()
     response = spreadsheet.values_batch_get(ranges)
     value_ranges = response.get("valueRanges", [])
 
     all_rows = []
-    for block in value_ranges:
+    for idx, sheet_name in enumerate(selected_names):
+        block = value_ranges[idx] if idx < len(value_ranges) else {}
         values = block.get("values", [])
+        raw_rows = len(values)
         if not values:
+            logger.info("[SOURCE %s] Sheet '%s': raw_rows=0, after_cutoff=0", task.source_id, sheet_name)
             continue
 
         df = pd.DataFrame(values)
         if df.empty:
+            logger.info("[SOURCE %s] Sheet '%s': raw_rows=%s, after_cutoff=0", task.source_id, sheet_name, raw_rows)
             continue
 
         df.columns = SCHEMA[: len(df.columns)]
         df = df.reindex(columns=SCHEMA).fillna("")
         df["date_update"] = df["date_update"].apply(try_parsing_date)
         df = df[df["date_update"] >= cutoff]
+        after_cutoff_rows = len(df)
+        logger.info(
+            "[SOURCE %s] Sheet '%s': raw_rows=%s, after_cutoff=%s",
+            task.source_id,
+            sheet_name,
+            raw_rows,
+            after_cutoff_rows,
+        )
         if df.empty:
             continue
 
@@ -447,54 +438,180 @@ def fetch_source_records(client: GSpreadClientWithCache, task: SourceTask, cutof
     return FetchResult(task.source_id, True, all_rows, payload_hash, len(all_rows), "", task.is_volatile)
 
 
-def run_parallel_fetch(client: GSpreadClientWithCache, tasks: list, state_map: dict) -> dict:
+def fetch_regular_source_with_rounds(client: GSpreadClientWithCache, task: SourceTask) -> FetchResult:
+    for round_no in range(1, SOURCE_MAX_ROUNDS + 1):
+        logger.info(
+            "[SOURCE %s] Round %s/%s start (volatile=%s)",
+            task.source_id,
+            round_no,
+            SOURCE_MAX_ROUNDS,
+            task.is_volatile,
+        )
+        try:
+            result = fetch_source_records(client, task)
+            logger.info(
+                "[SOURCE %s] Round %s/%s success. rows=%s",
+                task.source_id,
+                round_no,
+                SOURCE_MAX_ROUNDS,
+                result.row_count,
+            )
+            return result
+        except Exception as exc:
+            logger.error(
+                "[SOURCE %s] Round %s/%s failed: %s",
+                task.source_id,
+                round_no,
+                SOURCE_MAX_ROUNDS,
+                exc,
+            )
+            if round_no < SOURCE_MAX_ROUNDS:
+                logger.info(
+                    "[SOURCE %s] Retry after %ss",
+                    task.source_id,
+                    SOURCE_RETRY_WAIT_SECONDS,
+                )
+                time.sleep(SOURCE_RETRY_WAIT_SECONDS)
+
+    return FetchResult(
+        source_id=task.source_id,
+        success=False,
+        rows=[],
+        payload_hash="",
+        row_count=0,
+        error=f"Failed after {SOURCE_MAX_ROUNDS} rounds",
+        is_volatile=task.is_volatile,
+    )
+
+
+def fetch_volatile_source_when_stable(client: GSpreadClientWithCache, task: SourceTask) -> FetchResult:
+    for round_no in range(1, VOLATILE_MAX_ROUNDS + 1):
+        logger.info("[VOLATILE %s] Stability round %s/%s start", task.source_id, round_no, VOLATILE_MAX_ROUNDS)
+
+        try:
+            count_1, per_sheet_1 = count_source_rows(client, task)
+        except Exception as exc:
+            logger.error("[VOLATILE %s] Round %s count #1 failed: %s", task.source_id, round_no, exc)
+            continue
+
+        logger.info(
+            "[VOLATILE %s] Waiting %ss before count #2",
+            task.source_id,
+            VOLATILE_STABLE_WAIT_SECONDS,
+        )
+        time.sleep(VOLATILE_STABLE_WAIT_SECONDS)
+
+        try:
+            count_2, per_sheet_2 = count_source_rows(client, task)
+        except Exception as exc:
+            logger.error("[VOLATILE %s] Round %s count #2 failed: %s", task.source_id, round_no, exc)
+            continue
+
+        all_sheet_names = sorted(set(per_sheet_1) | set(per_sheet_2))
+        changed_sheets = [
+            name for name in all_sheet_names if per_sheet_1.get(name, 0) != per_sheet_2.get(name, 0)
+        ]
+        is_stable = count_1 == count_2 and not changed_sheets
+
+        logger.info(
+            "[VOLATILE %s] Round %s counts: first=%s second=%s stable=%s",
+            task.source_id,
+            round_no,
+            count_1,
+            count_2,
+            is_stable,
+        )
+
+        if changed_sheets:
+            logger.warning(
+                "[VOLATILE %s] Round %s changed sheets -> %s",
+                task.source_id,
+                round_no,
+                ", ".join(changed_sheets),
+            )
+
+        if is_stable and count_2 > 0:
+            logger.info(
+                "[VOLATILE %s] Round %s stable with rows=%s. Start processing.",
+                task.source_id,
+                round_no,
+                count_2,
+            )
+            try:
+                result = fetch_source_records(client, task)
+                logger.info(
+                    "[VOLATILE %s] Round %s process success. rows=%s",
+                    task.source_id,
+                    round_no,
+                    result.row_count,
+                )
+                return result
+            except Exception as exc:
+                logger.error("[VOLATILE %s] Round %s process failed: %s", task.source_id, round_no, exc)
+        else:
+            if count_2 == 0:
+                logger.warning(
+                    "[VOLATILE %s] Round %s stable but 0 rows. Mark as unstable and retry.",
+                    task.source_id,
+                    round_no,
+                )
+
+        if round_no < VOLATILE_MAX_ROUNDS:
+            logger.info("[VOLATILE %s] Move to next stability round", task.source_id)
+
+    return FetchResult(
+        source_id=task.source_id,
+        success=False,
+        rows=[],
+        payload_hash="",
+        row_count=0,
+        error=f"Volatile source not stable after {VOLATILE_MAX_ROUNDS} rounds",
+        is_volatile=True,
+    )
+
+
+def run_parallel_fetch(client: GSpreadClientWithCache, tasks: list) -> dict:
     results = {}
+    total_sources = len(tasks)
+    completed_sources = 0
+    logger.info("[EXTRACT] Start parallel fetch: sources=%s max_workers=%s", total_sources, max(1, MAX_WORKERS))
+
     with ThreadPoolExecutor(max_workers=max(1, MAX_WORKERS)) as executor:
         future_to_task = {}
         for task in tasks:
-            cutoff = compute_source_cutoff(task, state_map)
             logger.info(
-                f"Queue source {task.source_id} (volatile={task.is_volatile}) cutoff {cutoff.strftime('%Y-%m-%d %H:%M:%S')}"
+                "[QUEUE] source=%s row=%s volatile=%s sheets=%s",
+                task.source_id,
+                task.row_number,
+                task.is_volatile,
+                ", ".join(task.sheet_names),
             )
-            future = executor.submit(fetch_source_records, client, task, cutoff)
+            worker = fetch_volatile_source_when_stable if task.is_volatile else fetch_regular_source_with_rounds
+            future = executor.submit(worker, client, task)
             future_to_task[future] = task
 
         for future in as_completed(future_to_task):
             task = future_to_task[future]
-            try:
-                result = future.result()
-                results[task.source_id] = result
-                logger.info(f"OK   {task.source_id}: {result.row_count} rows")
-            except Exception as exc:
-                logger.error(f"FAIL {task.source_id}: {exc}")
-                results[task.source_id] = FetchResult(
-                    task.source_id, False, [], "", 0, str(exc), task.is_volatile
+            result = future.result()
+            results[task.source_id] = result
+            completed_sources += 1
+            if result.success:
+                logger.info(
+                    "[DONE] %s success rows=%s progress=%s/%s",
+                    task.source_id,
+                    result.row_count,
+                    completed_sources,
+                    total_sources,
+                )
+            else:
+                logger.error(
+                    "[DONE] %s failed: %s progress=%s/%s",
+                    task.source_id,
+                    result.error,
+                    completed_sources,
+                    total_sources,
                 )
     return results
-
-
-def stabilize_volatile_sources(client: GSpreadClientWithCache, tasks: list, state_map: dict, results: dict):
-    for task in tasks:
-        if not task.is_volatile:
-            continue
-
-        first = results.get(task.source_id)
-        if not first or not first.success:
-            continue
-
-        cutoff = compute_source_cutoff(task, state_map)
-        try:
-            second = fetch_source_records(client, task, cutoff)
-        except Exception as exc:
-            logger.warning(f"Volatile re-read failed for {task.source_id}: {exc}")
-            continue
-
-        if second.payload_hash != first.payload_hash:
-            logger.warning(
-                f"Volatile source changed during run ({task.source_id}). "
-                f"Use second read: {first.row_count} -> {second.row_count} rows."
-            )
-            results[task.source_id] = second
 
 
 # =========================
@@ -598,28 +715,9 @@ def normalize_dates(df: pd.DataFrame, date_cols: list) -> pd.DataFrame:
 def write_master(ws_master, values: list):
     data_rows = max(len(values) - 1, 0)
     data_cols = len(values[0]) if values else len(SCHEMA)
-    required_cols = data_cols + FORMULA_COLS
-    required_rows = max(len(values) + 10, 2)
 
     logger.info("[LOAD] Write %s rows, %s columns to master", data_rows, data_cols)
-    logger.info(
-        "[LOAD] Current grid rows=%s cols=%s, required rows=%s cols=%s",
-        ws_master.row_count,
-        ws_master.col_count,
-        required_rows,
-        required_cols,
-    )
-
-    if ws_master.row_count < required_rows or ws_master.col_count < required_cols:
-        target_rows = max(ws_master.row_count, required_rows)
-        target_cols = max(ws_master.col_count, required_cols)
-        logger.info(
-            "[LOAD] Resize worksheet -> rows=%s cols=%s (to prevent grid limit errors)",
-            target_rows,
-            target_cols,
-        )
-        rate_limit_write()
-        ws_master.resize(rows=target_rows, cols=target_cols)
+    logger.info("[LOAD] Auto-resize disabled (use existing worksheet columns as configured manually)")
 
     data_end_col = col_index_to_a1(data_cols)
     formula_start_col = col_index_to_a1(data_cols + 1)
@@ -675,25 +773,26 @@ def write_master(ws_master, values: list):
 # =========================
 def main():
     logger.info("=== START new_productivity ingestion ===")
+    logger.info("[CONFIG] GLOBAL_CUTOFF_DATE=%s", GLOBAL_CUTOFF_DATE)
+    logger.info("[CONFIG] VOLATILE_SOURCE_ROW=%s", VOLATILE_SOURCE_ROW)
+    logger.info("[CONFIG] VOLATILE_STABLE_WAIT_SECONDS=%s", VOLATILE_STABLE_WAIT_SECONDS)
+    logger.info("[CONFIG] VOLATILE_MAX_ROUNDS=%s", VOLATILE_MAX_ROUNDS)
+    logger.info("[CONFIG] SOURCE_MAX_ROUNDS=%s", SOURCE_MAX_ROUNDS)
     client = GSpreadClientWithCache(authenticate_gspread())
 
-    logger.info("[STEP 1/5] Load source configuration")
+    logger.info("[STEP 1/4] Load source configuration")
     link_spreadsheet = client.open_by_url(LINK_SPREADSHEET_URL)
     ws_links = client.worksheet(link_spreadsheet, "Productivity File")
     source_tasks = build_source_tasks(ws_links)
-    logger.info("[STEP 1/5] Configured sources: %s", len(source_tasks))
+    logger.info("[STEP 1/4] Configured sources: %s", len(source_tasks))
 
-    logger.info("[STEP 2/5] Load master + state")
+    logger.info("[STEP 2/4] Load master worksheet")
     master_spreadsheet = client.open_by_url(MASTER_SPREADSHEET_URL)
     ws_master = client.worksheet(master_spreadsheet, "Productivity")
-    ws_state = get_or_create_state_ws(client, master_spreadsheet)
-    state_map = load_state(ws_state)
 
-    logger.info("[STEP 3/5] Fetch sources in parallel")
-    results = run_parallel_fetch(client, source_tasks, state_map)
-    stabilize_volatile_sources(client, source_tasks, state_map, results)
+    logger.info("[STEP 3/4] Fetch sources in parallel")
+    results = run_parallel_fetch(client, source_tasks)
 
-    success_ids = {source_id for source_id, result in results.items() if result.success}
     failed = [(source_id, result.error) for source_id, result in results.items() if not result.success]
 
     incoming_rows = []
@@ -702,7 +801,7 @@ def main():
             incoming_rows.extend(result.rows)
         logger.info("[EXTRACT] %s success=%s rows=%s", source_id, result.success, result.row_count)
 
-    logger.info("[STEP 4/5] Merge incremental data")
+    logger.info("[STEP 4/4] Merge data")
     incoming_df = pd.DataFrame.from_records(incoming_rows)
     if incoming_df.empty:
         incoming_df = pd.DataFrame(columns=SCHEMA)
@@ -719,13 +818,12 @@ def main():
     merged_df.fillna("", inplace=True)
     logger.info("[MERGE] incoming=%s existing=%s merged=%s", len(incoming_df), len(existing_df), len(merged_df))
 
-    logger.info("[STEP 5/5] Write output + update state")
+    logger.info("[WRITE] Start writing output")
     if DRY_RUN:
-        logger.info("[STEP 5/5] DRY_RUN=true -> skip write master + state")
+        logger.info("[WRITE] DRY_RUN=true -> skip write master")
     else:
         values = [merged_df.columns.tolist()] + merged_df.values.tolist()
         write_master(ws_master, values)
-        save_state(ws_state, source_tasks, state_map, success_ids)
 
     if failed:
         logger.warning("[END] Run completed with %s failed sources", len(failed))

@@ -47,7 +47,7 @@ jobs:
 
     - name: Run productivity script
       run: |
-        python productivity.py
+        python new_productivity.py
 
     - name: Run nationwide script
       run: |

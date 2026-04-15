@@ -99,6 +99,7 @@ STATE_WORKSHEET_NAME = os.getenv("STATE_WORKSHEET_NAME", "_IngestionState")
 
 MAX_WORKERS = int(os.getenv("MAX_WORKERS", "8"))
 DRY_RUN = os.getenv("DRY_RUN", "false").lower() == "true"
+FORMULA_COLS = 2
 
 
 # =========================
@@ -289,6 +290,16 @@ def build_record_key(df: pd.DataFrame) -> pd.Series:
         )
         key = key.mask(empty_mask, "row:" + fallback)
     return key
+
+
+def col_index_to_a1(col_index: int) -> str:
+    if col_index <= 0:
+        raise ValueError("Column index must be >= 1")
+    chars = []
+    while col_index > 0:
+        col_index, rem = divmod(col_index - 1, 26)
+        chars.append(chr(65 + rem))
+    return "".join(reversed(chars))
 
 
 # =========================
@@ -585,10 +596,37 @@ def normalize_dates(df: pd.DataFrame, date_cols: list) -> pd.DataFrame:
 # =========================
 @retry(**RETRY_POLICY)
 def write_master(ws_master, values: list):
-    logger.info(f"Write {len(values) - 1} rows to master sheet")
+    data_rows = max(len(values) - 1, 0)
+    data_cols = len(values[0]) if values else len(SCHEMA)
+    required_cols = data_cols + FORMULA_COLS
+    required_rows = max(len(values) + 10, 2)
 
+    logger.info("[LOAD] Write %s rows, %s columns to master", data_rows, data_cols)
+    logger.info(
+        "[LOAD] Current grid rows=%s cols=%s, required rows=%s cols=%s",
+        ws_master.row_count,
+        ws_master.col_count,
+        required_rows,
+        required_cols,
+    )
+
+    if ws_master.row_count < required_rows or ws_master.col_count < required_cols:
+        target_rows = max(ws_master.row_count, required_rows)
+        target_cols = max(ws_master.col_count, required_cols)
+        logger.info(
+            "[LOAD] Resize worksheet -> rows=%s cols=%s (to prevent grid limit errors)",
+            target_rows,
+            target_cols,
+        )
+        rate_limit_write()
+        ws_master.resize(rows=target_rows, cols=target_cols)
+
+    data_end_col = col_index_to_a1(data_cols)
+    formula_start_col = col_index_to_a1(data_cols + 1)
+    formula_end_col = col_index_to_a1(data_cols + FORMULA_COLS)
+    logger.info("[LOAD] Clear ranges A:%s and %s:%s", data_end_col, formula_start_col, formula_end_col)
     rate_limit_write()
-    ws_master.batch_clear(["A:AQ", "AR:AS"])
+    ws_master.batch_clear([f"A:{data_end_col}", f"{formula_start_col}:{formula_end_col}"])
 
     block_bytes_limit = 8 * 1024 * 1024
     row_pointer = 1
@@ -599,6 +637,8 @@ def write_master(ws_master, values: list):
         row_str = [("" if (cell is None or cell != cell) else cell) for cell in row]
         row_bytes = sum(len(str(cell).encode("utf-8")) for cell in row_str)
         if current_block and current_size + row_bytes > block_bytes_limit:
+            end_row = row_pointer + len(current_block) - 1
+            logger.info("[LOAD] Update block A%s:%s%s (%s rows)", row_pointer, data_end_col, end_row, len(current_block))
             rate_limit_write()
             ws_master.update(f"A{row_pointer}", current_block, value_input_option="RAW")
             row_pointer += len(current_block)
@@ -609,37 +649,47 @@ def write_master(ws_master, values: list):
         current_size += row_bytes
 
     if current_block:
+        end_row = row_pointer + len(current_block) - 1
+        logger.info("[LOAD] Update final block A%s:%s%s (%s rows)", row_pointer, data_end_col, end_row, len(current_block))
         rate_limit_write()
         ws_master.update(f"A{row_pointer}", current_block, value_input_option="USER_ENTERED")
 
+    formula_header_range = f"{formula_start_col}1:{formula_end_col}1"
+    formula_channel_range = f"{formula_start_col}2"
+    formula_team_range = f"{formula_end_col}2"
+    logger.info("[LOAD] Update formula columns at %s and %s", formula_channel_range, formula_team_range)
     rate_limit_write()
     ws_master.batch_update(
         [
-            {"range": "AR1:AS1", "values": [["channel_by_prod", "team"]]},
-            {"range": "AR2", "values": [["=ARRAYFORMULA(IFNA(XLOOKUP(D2:D,Source!$A:$A,Source!$C:$C)))"]]},
-            {"range": "AS2", "values": [["=ARRAYFORMULA(IFNA(XLOOKUP(AO2:AO,Info!$C:$C,Info!$N:$N)))"]]},
+            {"range": formula_header_range, "values": [["channel_by_prod", "team"]]},
+            {"range": formula_channel_range, "values": [["=ARRAYFORMULA(IFNA(XLOOKUP(D2:D,Source!$A:$A,Source!$C:$C)))"]]},
+            {"range": formula_team_range, "values": [["=ARRAYFORMULA(IFNA(XLOOKUP(AO2:AO,Info!$C:$C,Info!$N:$N)))"]]},
         ],
         value_input_option="USER_ENTERED",
     )
+    logger.info("[LOAD] Master write complete")
 
 
 # =========================
 # MAIN
 # =========================
 def main():
-    logger.info("Start new_productivity ingestion")
+    logger.info("=== START new_productivity ingestion ===")
     client = GSpreadClientWithCache(authenticate_gspread())
 
+    logger.info("[STEP 1/5] Load source configuration")
     link_spreadsheet = client.open_by_url(LINK_SPREADSHEET_URL)
     ws_links = client.worksheet(link_spreadsheet, "Productivity File")
     source_tasks = build_source_tasks(ws_links)
-    logger.info(f"Configured sources: {len(source_tasks)}")
+    logger.info("[STEP 1/5] Configured sources: %s", len(source_tasks))
 
+    logger.info("[STEP 2/5] Load master + state")
     master_spreadsheet = client.open_by_url(MASTER_SPREADSHEET_URL)
     ws_master = client.worksheet(master_spreadsheet, "Productivity")
     ws_state = get_or_create_state_ws(client, master_spreadsheet)
     state_map = load_state(ws_state)
 
+    logger.info("[STEP 3/5] Fetch sources in parallel")
     results = run_parallel_fetch(client, source_tasks, state_map)
     stabilize_volatile_sources(client, source_tasks, state_map, results)
 
@@ -650,8 +700,9 @@ def main():
     for source_id, result in results.items():
         if result.success and result.rows:
             incoming_rows.extend(result.rows)
-        logger.info(f"Source {source_id}: success={result.success} rows={result.row_count}")
+        logger.info("[EXTRACT] %s success=%s rows=%s", source_id, result.success, result.row_count)
 
+    logger.info("[STEP 4/5] Merge incremental data")
     incoming_df = pd.DataFrame.from_records(incoming_rows)
     if incoming_df.empty:
         incoming_df = pd.DataFrame(columns=SCHEMA)
@@ -666,25 +717,24 @@ def main():
     merged_df = normalize_dates(merged_df, DATE_COLS)
     merged_df.replace([float("inf"), float("-inf")], "", inplace=True)
     merged_df.fillna("", inplace=True)
-    logger.info(
-        f"Rows summary: incoming={len(incoming_df)}, existing={len(existing_df)}, merged={len(merged_df)}"
-    )
+    logger.info("[MERGE] incoming=%s existing=%s merged=%s", len(incoming_df), len(existing_df), len(merged_df))
 
+    logger.info("[STEP 5/5] Write output + update state")
     if DRY_RUN:
-        logger.info("DRY_RUN=true, skip writing master and state.")
+        logger.info("[STEP 5/5] DRY_RUN=true -> skip write master + state")
     else:
         values = [merged_df.columns.tolist()] + merged_df.values.tolist()
         write_master(ws_master, values)
         save_state(ws_state, source_tasks, state_map, success_ids)
 
     if failed:
-        logger.warning(f"Run completed with {len(failed)} failed sources.")
+        logger.warning("[END] Run completed with %s failed sources", len(failed))
         for source_id, err in failed:
-            logger.warning(f" - {source_id}: {err}")
+            logger.warning("[END] %s -> %s", source_id, err)
     else:
-        logger.info("Run completed with no failed sources.")
+        logger.info("[END] Run completed with no failed sources")
 
-    logger.info("DONE")
+    logger.info("=== DONE ===")
 
 
 if __name__ == "__main__":

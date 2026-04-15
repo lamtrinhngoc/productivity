@@ -715,13 +715,34 @@ def normalize_dates(df: pd.DataFrame, date_cols: list) -> pd.DataFrame:
 def write_master(ws_master, values: list):
     data_rows = max(len(values) - 1, 0)
     data_cols = len(values[0]) if values else len(SCHEMA)
+    required_rows = max(len(values), 2)
+    required_cols = data_cols + FORMULA_COLS
 
     logger.info("[LOAD] Write %s rows, %s columns to master", data_rows, data_cols)
-    logger.info("[LOAD] Auto-resize disabled (use existing worksheet columns as configured manually)")
+    logger.info(
+        "[LOAD] Current grid rows=%s cols=%s | required rows=%s cols=%s",
+        ws_master.row_count,
+        ws_master.col_count,
+        required_rows,
+        required_cols,
+    )
+
+    # Keep user's manual column management, but auto-expand rows to prevent A{n} grid-limit errors.
+    if ws_master.row_count < required_rows:
+        logger.info("[LOAD] Expand rows only: %s -> %s", ws_master.row_count, required_rows)
+        rate_limit_write()
+        ws_master.resize(rows=required_rows)
 
     data_end_col = col_index_to_a1(data_cols)
     formula_start_col = col_index_to_a1(data_cols + 1)
     formula_end_col = col_index_to_a1(data_cols + FORMULA_COLS)
+
+    if ws_master.col_count < required_cols:
+        raise ValueError(
+            f"Worksheet has {ws_master.col_count} columns but requires at least {required_cols}. "
+            "Please add columns manually as requested."
+        )
+
     logger.info("[LOAD] Clear ranges A:%s and %s:%s", data_end_col, formula_start_col, formula_end_col)
     rate_limit_write()
     ws_master.batch_clear([f"A:{data_end_col}", f"{formula_start_col}:{formula_end_col}"])

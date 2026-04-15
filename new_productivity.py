@@ -407,7 +407,7 @@ def fetch_source_records(client: GSpreadClientWithCache, task: SourceTask, cutof
     if not selected_names:
         return FetchResult(task.source_id, True, [], "", 0, "", task.is_volatile)
 
-    ranges = [f"'{name.replace(\"'\", \"''\")}'!B8:AR" for name in selected_names]
+    ranges = ["'{}'!B8:AR".format(name.replace("'", "''")) for name in selected_names]
     rate_limit_read()
     response = spreadsheet.values_batch_get(ranges)
     value_ranges = response.get("valueRanges", [])

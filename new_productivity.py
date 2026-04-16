@@ -662,26 +662,15 @@ def merge_incremental(existing_df: pd.DataFrame, incoming_df: pd.DataFrame) -> p
 
 
 def normalize_dates(df: pd.DataFrame, date_cols: list) -> pd.DataFrame:
-    df = df.copy()
-
     for col in date_cols:
-        if col not in df.columns:
-            df[col] = ""
         df[col] = df[col].apply(try_parsing_date).dt.strftime("%Y-%m-%d")
         df[col] = df[col].fillna("")
 
     action = ["recruiter_call", "hm_interview", "offering", "accept", "onboard"]
-    for col in action:
-        if col not in df.columns:
-            df[col] = 0
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    if "ticket_id" not in df.columns:
-        df["ticket_id"] = 0
-    df["ticket_id"] = pd.to_numeric(df["ticket_id"], errors="coerce").fillna(0)
-    mask = df["ticket_id"] < 20
-    if mask.any():
-        df.loc[mask, "ticket_id"] = df.loc[mask, action].sum(axis=1)
+    for c in action:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    df["ticket_id"] = pd.to_numeric(df.get("ticket_id", 0), errors="coerce").fillna(0)
+    df.loc[df["ticket_id"] < 20, "ticket_id"] = df.loc[df["ticket_id"] < 20, action].sum(axis=1)
 
     if "phone" in df.columns:
         df["phone"] = df["phone"].astype(str).str.replace(r"\D", "", regex=True)
@@ -703,9 +692,10 @@ def normalize_dates(df: pd.DataFrame, date_cols: list) -> pd.DataFrame:
                 else group["ticket_id"].idxmax()
             )
             selected_idx.append(keep_idx)
+
         df = df.loc[selected_idx].reset_index(drop=True)
 
-    return df.reindex(columns=SCHEMA).fillna("")
+    return df
 
 
 # =========================
@@ -822,7 +812,7 @@ def main():
             incoming_rows.extend(result.rows)
         logger.info("[EXTRACT] %s success=%s rows=%s", source_id, result.success, result.row_count)
 
-    logger.info("[STEP 4/4] Merge data")
+    logger.info("[STEP 4/4] Clean data (full refresh mode)")
     incoming_df = pd.DataFrame.from_records(incoming_rows)
     if incoming_df.empty:
         incoming_df = pd.DataFrame(columns=SCHEMA)
@@ -832,18 +822,17 @@ def main():
                 incoming_df[col] = ""
         incoming_df = incoming_df.reindex(columns=SCHEMA).fillna("")
 
-    existing_df = read_existing_master(ws_master)
-    merged_df = merge_incremental(existing_df, incoming_df)
-    merged_df = normalize_dates(merged_df, DATE_COLS)
-    merged_df.replace([float("inf"), float("-inf")], "", inplace=True)
-    merged_df.fillna("", inplace=True)
-    logger.info("[MERGE] incoming=%s existing=%s merged=%s", len(incoming_df), len(existing_df), len(merged_df))
+    all_data = normalize_dates(incoming_df, DATE_COLS)
+    all_data.replace([float("inf"), float("-inf")], "", inplace=True)
+    all_data.fillna("", inplace=True)
+    all_data = all_data.reindex(columns=SCHEMA).fillna("")
+    logger.info("[CLEAN] incoming=%s output=%s (full refresh overwrite)", len(incoming_df), len(all_data))
 
     logger.info("[WRITE] Start writing output")
     if DRY_RUN:
         logger.info("[WRITE] DRY_RUN=true -> skip write master")
     else:
-        values = [merged_df.columns.tolist()] + merged_df.values.tolist()
+        values = [all_data.columns.tolist()] + all_data.values.tolist()
         write_master(ws_master, values)
 
     if failed:

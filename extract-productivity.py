@@ -179,6 +179,23 @@ def main():
         value_input_option='USER_ENTERED'
     )
 
+    # File [WFA] Performance Management | Quynh Trang
+
+    quynh_trang = df_all_member_productivity[
+        (df_all_member_productivity['team'] == "Quynh Trang")
+    ]
+    
+    quynh_trang_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1fQHpixWzd6Ho-Zci5mHWE0klXIGcLGZAEG5g6LwBF90')
+    if quynh_trang_spreadsheet is None:
+        return
+
+    quynh_trang_sheet = quynh_trang_spreadsheet.worksheet("Raw Productivity")
+    quynh_trang_sheet.clear()
+    quynh_trang_sheet.update(
+        [quynh_trang.columns.values.tolist()] + quynh_trang.values.tolist(),
+        value_input_option='USER_ENTERED'
+    )
+    
     # File [WFA] Performance Management | Huyen Trang
 
     huyen_trang = df_all_member_productivity[

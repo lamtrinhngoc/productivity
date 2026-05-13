@@ -319,7 +319,6 @@ def main():
     )
 
     # File Binh Duong SOC
-
     soc_bd = df_all_member_productivity[
         df_all_member_productivity['station_name'].isin([
             "Binh Duong 1 SOC",
@@ -328,14 +327,14 @@ def main():
         ])
         & df_all_member_productivity['position'].str.contains("FTE Staff", na=False)
     ]
-
     soc_bd_spreadsheet = open_spreadsheet_by_url('https://docs.google.com/spreadsheets/d/1-uKjt-NamVr3eOwAycYicJnFkTF5SkzQeI0PX7O_r9k')
     if soc_bd_spreadsheet is None:
         return
     soc_bd_sheet = soc_bd_spreadsheet.worksheet("Raw Productivity")
-    soc_bd_sheet.clear()
+    soc_bd_sheet.batch_clear(["A:AS"])
     soc_bd_sheet.update(
-        [soc_bd.columns.values.tolist()] + soc_bd.values.tolist(),
+        range_name="A1",
+        values=[soc_bd.columns.values.tolist()] + soc_bd.values.tolist(),
         value_input_option='USER_ENTERED'
     )
     

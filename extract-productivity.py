@@ -194,8 +194,8 @@ def main():
     team_files = [
         ("Van Anh",     'https://docs.google.com/spreadsheets/d/1E-kFjoHSmOnrDK_O4tpegxBh5qh4wTxfhvMXoL-p5O4',
             lambda d: d[d['team'] == "Van Anh"]),
-        ("Minh Nguyet", 'https://docs.google.com/spreadsheets/d/1DCcJycFigvCWZz51jnyZtvMInHnJ0AGXAfg0B6WBq40',
-            lambda d: d[d['team'] == "Minh Nguyet"]),
+        ("Viet Vuong", 'https://docs.google.com/spreadsheets/d/1DCcJycFigvCWZz51jnyZtvMInHnJ0AGXAfg0B6WBq40',
+            lambda d: d[d['team'] == "Viet Vuong"]),
         ("Trinh Phan",  'https://docs.google.com/spreadsheets/d/1Iwt_1x_KHzRAQZ9FEi0hBeGBfTrvbwxDyrjjGkz6VRU',
             lambda d: d[d['team'].isin(["Trinh Phan", "Hoai Phuong"])]),
         ("Hoa Bui",     'https://docs.google.com/spreadsheets/d/1oJ_UHIbolyFI616oyS_df1yv0NczeRputMtCjAis5AY',

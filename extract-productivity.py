@@ -6,6 +6,7 @@ import numpy as np
 import logging
 import re
 import time
+import random
 
 logging.basicConfig(
     level=logging.INFO,
@@ -15,24 +16,48 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # ---------- Retry helper ----------
-RETRYABLE_STATUSES = (429, 500, 502, 503, 504)
+HARD_RETRY_STATUSES = (429, 500, 502, 503, 504)
+SOFT_RETRY_STATUSES = (403, 404)
 MAX_RETRIES = 6
+SOFT_MAX = 2
+
 
 def with_retry(func, *args, max_retries=MAX_RETRIES, **kwargs):
+    """
+    Retry phân tầng:
+    - Hard errors (429, 5xx): retry tới max_retries lần, backoff exponential + jitter
+    - Soft errors (403, 404): chỉ retry SOFT_MAX lần với backoff dài (có thể là lỗi thật)
+    - Lỗi khác: raise ngay
+    """
+    soft_attempts = 0
+
     for attempt in range(max_retries):
         try:
             return func(*args, **kwargs)
         except APIError as e:
             status = getattr(e.response, "status_code", None)
-            if status in RETRYABLE_STATUSES and attempt < max_retries - 1:
-                wait = 2 ** attempt + 1
+
+            if status in HARD_RETRY_STATUSES and attempt < max_retries - 1:
+                wait = min(2 ** attempt, 30) + random.uniform(0, 1)
                 log.warning(
                     f"  ↻ APIError {status} on {func.__name__}, "
-                    f"retry {attempt+1}/{max_retries} sau {wait}s"
+                    f"hard-retry {attempt+1}/{max_retries} sau {wait:.1f}s"
                 )
                 time.sleep(wait)
+
+            elif status in SOFT_RETRY_STATUSES and soft_attempts < SOFT_MAX:
+                soft_attempts += 1
+                wait = 15 * soft_attempts + random.uniform(0, 2)
+                log.warning(
+                    f"  ↻ APIError {status} on {func.__name__} (có thể transient), "
+                    f"soft-retry {soft_attempts}/{SOFT_MAX} sau {wait:.1f}s"
+                )
+                time.sleep(wait)
+
             else:
                 raise
+
+    raise RuntimeError(f"{func.__name__} failed sau {max_retries} lần retry")
 
 
 def main():

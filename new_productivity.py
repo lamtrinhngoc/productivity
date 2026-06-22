@@ -38,8 +38,9 @@ SCHEMA = [
     "date_cdd_applied",
     "fullname",
     "source",
-    "dob",
     "phone",
+    "dob",
+    "gender",
     "area",
     "address",
     "registration_area",
@@ -603,7 +604,7 @@ def write_master(ws_master, values: list):
         [
             {"range": f"{formula_start_col}1:{formula_end_col}1", "values": [["channel_by_prod", "team"]]},
             {"range": f"{formula_start_col}2", "values": [["=ARRAYFORMULA(IFNA(XLOOKUP(D2:D,Source!$A:$A,Source!$C:$C)))"]]},
-            {"range": f"{formula_end_col}2", "values": [["=ARRAYFORMULA(IFNA(XLOOKUP(AO2:AO,Info!$C:$C,Info!$N:$N)))"]]},
+            {"range": f"{formula_end_col}2", "values": [["=ARRAYFORMULA(IFNA(XLOOKUP(AP2:AP,Info!$C:$C,Info!$N:$N)))"]]},
         ],
         value_input_option="USER_ENTERED",
     )

@@ -70,7 +70,7 @@ def main():
     results = []   # list of dict: {name, status, rows, error, duration}
 
     def write_df_to_sheet(name, url, worksheet_name, df,
-                          use_batch_clear=False, clear_range="A:AS"):
+                          use_batch_clear=False, clear_range="A:AT"):
         """Ghi DataFrame vào sheet, log + lưu kết quả."""
         start = time.time()
         rows = len(df)
@@ -278,7 +278,7 @@ def main():
             & df['position'].str.contains("FTE Staff", na=False)
         ],
         use_batch_clear=True,
-        clear_range="A:AS"
+        clear_range="A:AT"
     )
 
     # ---------- Bảng tổng kết ----------

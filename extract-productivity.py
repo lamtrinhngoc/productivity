@@ -238,6 +238,13 @@ def main():
         write_df_to_sheet(name, url, "Raw Productivity", filter_fn(df))
 
     write_df_to_sheet(
+        "External Referral",
+        'https://docs.google.com/spreadsheets/d/18ojJoncFCt35Bf9H9uHAUmOOr8U61sPZXgk_yvEtpuI/edit?gid=1701019638#gid=1701019638',
+        "Raw Productivity",
+        df[df['source'].str.contains("SPX-Referral Program-RP-External", na=False)]
+    )
+
+    write_df_to_sheet(
         "Linehaul",
         'https://docs.google.com/spreadsheets/d/1y12mSMS03JCWRDkVojJWNt93R7E_p3poUa5xEGIUmgk',
         "Raw Productivity",

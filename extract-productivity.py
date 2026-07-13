@@ -223,8 +223,8 @@ def main():
             lambda d: d[d['team'] == "Van Anh"]),
         ("Viet Vuong", 'https://docs.google.com/spreadsheets/d/1DCcJycFigvCWZz51jnyZtvMInHnJ0AGXAfg0B6WBq40',
             lambda d: d[d['team'] == "Viet Vuong"]),
-        ("Trinh Phan",  'https://docs.google.com/spreadsheets/d/1Iwt_1x_KHzRAQZ9FEi0hBeGBfTrvbwxDyrjjGkz6VRU',
-            lambda d: d[d['team'] == 'Trinh Phan']),
+        ("Hoai Phuong",  'https://docs.google.com/spreadsheets/d/1Iwt_1x_KHzRAQZ9FEi0hBeGBfTrvbwxDyrjjGkz6VRU',
+            lambda d: d[d['team'] == 'Hoai Phuong']),
         ("Hoa Bui",     'https://docs.google.com/spreadsheets/d/1oJ_UHIbolyFI616oyS_df1yv0NczeRputMtCjAis5AY',
             lambda d: d[d['team'] == "Hoa Bui"]),
         ("Quynh Trang", 'https://docs.google.com/spreadsheets/d/1fQHpixWzd6Ho-Zci5mHWE0klXIGcLGZAEG5g6LwBF90',
@@ -237,6 +237,8 @@ def main():
             lambda d: d[d['team'] == "Nhi Tran"]),
         ("Trinh Phan",  'https://docs.google.com/spreadsheets/d/1BIjhc47fc2mtXbHFK2Y_edqzu_pgrQjDVXE56MRwdpU',
             lambda d: d[d['team'] == 'Trinh Phan']),
+        ("Hoai Phuong",  'https://docs.google.com/spreadsheets/d/19MLD_rTpMD4zke0pPp855KUCgsWr2yggMdPlagbprG0',
+            lambda d: d[d['team'] == 'Hoai Phuong']),
     ]
     for name, url, filter_fn in team_files:
         write_df_to_sheet(name, url, "Raw Productivity", filter_fn(df))

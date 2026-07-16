@@ -285,8 +285,33 @@ def normalize_dates_phone_id(df: pd.DataFrame, date_cols: list) -> pd.DataFrame:
 # WRITE MASTER (optimized)
 # =========================
 @retry(**RETRY_POLICY)
+def ensure_grid_size(ws_master, needed_rows: int, needed_cols: int = 45):
+    """Grow the worksheet grid if the data (or the AR/AS formula columns)
+    would exceed the sheet's current row/column limits. gspread raises
+    'Range exceeds grid limits' otherwise (e.g. writing to A36532 on a
+    sheet that only has 36531 rows)."""
+    current_rows = ws_master.row_count
+    current_cols = ws_master.col_count
+    target_rows  = max(needed_rows, current_rows)
+    target_cols  = max(needed_cols, current_cols)
+
+    if target_rows > current_rows or target_cols > current_cols:
+        logger.info(
+            f"  📐 Resizing master grid: {current_rows}x{current_cols} → {target_rows}x{target_cols}"
+        )
+        rate_limit_write()
+        ws_master.resize(rows=target_rows, cols=target_cols)
+
+
+@retry(**RETRY_POLICY)
 def write_master(ws_master, values: list):
     logger.info(f"🚀 Writing {len(values) - 1} rows to master sheet")
+
+    # 0. Make sure the grid is big enough for the data + the AR/AS formula
+    #    columns (45 = column AS) before writing anything.
+    #    Small buffer of extra rows so future runs with slightly more data
+    #    don't immediately hit the limit again.
+    ensure_grid_size(ws_master, needed_rows=len(values) + 100, needed_cols=45)
 
     # 1. Clear data range only
     rate_limit_write()

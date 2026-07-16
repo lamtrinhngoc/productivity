@@ -1,4 +1,3 @@
-import math
 import os
 import time
 import logging
@@ -24,7 +23,7 @@ logger = logging.getLogger(__name__)
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 
 LINK_SPREADSHEET_URL   = "https://docs.google.com/spreadsheets/d/10eMZVnmtyyr5JAzDvpE5Brgh-8fw3lEKmGvL5m6eCUY"
-MASTER_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1VlXicEr1FGrpdDcRpuv1aE2TAG-7QHEfWKNtFJF4nc8"
+MASTER_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1O2DOwLEKZvVthDOJBWQIuA5Vh0we9mOyqruuFBMpDSk"
 
 REQUIRED_COLS = ["Link", "Sheet 1", "Sheet 2", "Sheet 3", "Sheet 4", "Sheet 5"]
 
@@ -44,7 +43,7 @@ DATE_COLS = [
     "hm_interview_date", "offering_date", "accept_date", "onboard_date"
 ]
 
-# Configurable via env var — no more silent hardcoded date
+# Configurable via env var
 FILTER_DATE_FROM = pd.Timestamp(os.getenv("FILTER_DATE_FROM", "2025-07-01"))
 
 # =========================
@@ -110,10 +109,7 @@ def authenticate_gspread():
 
 
 class GSpreadClientWithCache:
-    """Thread-safe gspread client with spreadsheet/worksheet caching.
-    Network I/O is performed outside the lock so threads only serialize
-    on cache lookups, not on API round-trips.
-    """
+    """Thread-safe gspread client with spreadsheet/worksheet caching."""
 
     def __init__(self, client):
         self.client = client
@@ -168,7 +164,7 @@ def try_parsing_date(text):
 
 
 # =========================
-# READ SHEETS
+# READ SHEETS (raw fetch, only date filter kept)
 # =========================
 @retry(**RETRY_POLICY)
 def read_worksheet_with_retry(ws, schema):
@@ -201,15 +197,7 @@ def fetch_all_sheets(
     max_workers: int = 4,
     max_rounds: int = 5,
 ) -> tuple:
-    """Fetch all sheets in parallel with up to max_rounds retry rounds.
-
-    - Successful sheets are logged immediately with row count.
-    - WorksheetNotFound is logged and skipped (not retried).
-    - Other failures are collected and retried next round with a back-off wait.
-    - A final summary lists any sheets that never succeeded.
-
-    Returns (combined_dataframe, permanently_failed_tasks).
-    """
+    """Fetch all sheets in parallel with up to max_rounds retry rounds."""
     all_rows: list = []
     pending   = list(sheet_tasks)
 
@@ -233,7 +221,6 @@ def fetch_all_sheets(
                     all_rows.extend(rows)
                     logger.info(f"  ✅ OK  — sheet '{name}' from {url}  ({len(rows)} rows)")
                 except gspread.exceptions.WorksheetNotFound:
-                    # Sheet genuinely doesn't exist — no point retrying
                     logger.error(f"  ❌ SKIP — sheet '{name}' not found in {url} (will not retry)")
                 except Exception as exc:
                     logger.error(f"  ❌ FAIL — sheet '{name}' from {url}: {exc}")
@@ -248,7 +235,6 @@ def fetch_all_sheets(
 
         pending = failed
 
-    # Final summary
     if pending:
         logger.error(f"❌ {len(pending)} sheet(s) permanently failed after {max_rounds} rounds:")
         for url, name in pending:
@@ -265,41 +251,32 @@ def fetch_all_sheets(
 
 
 # =========================
-# CLEAN DATA
+# LIGHT CLEAN — only date format, phone (9 digits), CCCD/id_code format
 # =========================
-def normalize_dates(df: pd.DataFrame, date_cols: list) -> pd.DataFrame:
+def normalize_dates_phone_id(df: pd.DataFrame, date_cols: list) -> pd.DataFrame:
+    # --- Dates: parse then format as YYYY-MM-DD ---
     for col in date_cols:
         df[col] = df[col].apply(try_parsing_date).dt.strftime("%Y-%m-%d")
         df[col] = df[col].fillna("")
 
-    action = ["recruiter_call", "hm_interview", "offering", "accept", "onboard"]
-    for c in action:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
-    df["ticket_id"] = pd.to_numeric(df.get("ticket_id", 0), errors="coerce").fillna(0)
-    df.loc[df["ticket_id"] < 20, "ticket_id"] = df.loc[df["ticket_id"] < 20, action].sum(axis=1)
-
+    # --- Phone: strip non-digits, keep last 9 digits ---
     if "phone" in df.columns:
         df["phone"] = df["phone"].astype(str).str.replace(r"\D", "", regex=True)
         df["phone"] = df["phone"].str[-9:]
         df["phone"] = df["phone"].replace(["nan", "NaN", "None"], "").fillna("")
 
-    required_cols = {"phone", "pic", "position", "ticket_id"}
-    if required_cols.issubset(df.columns):
-        if "id_code" not in df.columns:
-            df["id_code"] = ""
-        df["id_code"] = df["id_code"].fillna("").astype(str).str.strip()
-
-        selected_idx = []
-        for _, group in df.groupby(["phone", "pic", "position"], sort=False):
-            group_with_id = group[group["id_code"].str.len() > 0]
-            keep_idx = (
-                group_with_id["ticket_id"].idxmax()
-                if not group_with_id.empty
-                else group["ticket_id"].idxmax()
+    # --- CCCD / id_code: strip non-digits. Valid VN ID is 9 digits (old CMND)
+    #     or 12 digits (new CCCD) — keep the cleaned digits either way, but
+    #     only in the correct numeric-only format.
+    if "id_code" in df.columns:
+        df["id_code"] = df["id_code"].astype(str).str.replace(r"\D", "", regex=True)
+        df["id_code"] = df["id_code"].replace(["nan", "NaN", "None"], "").fillna("")
+        invalid_mask = ~df["id_code"].isin([""]) & ~df["id_code"].str.len().isin([9, 12])
+        if invalid_mask.any():
+            logger.warning(
+                f"  ⚠️  {invalid_mask.sum()} row(s) have id_code with invalid length "
+                f"(not 9 or 12 digits) — kept as-is, please review."
             )
-            selected_idx.append(keep_idx)
-
-        df = df.loc[selected_idx].reset_index(drop=True)
 
     return df
 
@@ -309,14 +286,6 @@ def normalize_dates(df: pd.DataFrame, date_cols: list) -> pd.DataFrame:
 # =========================
 @retry(**RETRY_POLICY)
 def write_master(ws_master, values: list):
-    """Write cleaned data to the master sheet.
-
-    vs. original:
-      - Header merged into first data block        → -1 API call
-      - Block size adaptive by bytes, not row count → safer under 10 MB limit
-      - 3 formula updates → 1 batch_update call     → -2 API calls & rate-limit waits
-      - Each API call acquires its own rate-limit token
-    """
     logger.info(f"🚀 Writing {len(values) - 1} rows to master sheet")
 
     # 1. Clear data range only
@@ -324,7 +293,6 @@ def write_master(ws_master, values: list):
     ws_master.batch_clear(["A:AQ"])
 
     # 2. Write data in byte-aware blocks
-    #    values[0] = header row, included as first row naturally
     BLOCK_BYTES_LIMIT = 8 * 1024 * 1024    # 8 MB — safely under Google's 10 MB limit
     row_pointer   = 1
     current_block: list = []
@@ -358,7 +326,7 @@ def write_master(ws_master, values: list):
         rate_limit_write()
         ws_master.update(f"A{row_pointer}", current_block, value_input_option="USER_ENTERED")
 
-    # 3. Formulas — 3 original calls collapsed into 1 batch_update
+    # 3. Formulas — 1 batch_update call
     logger.info("  ⚡ Writing formula columns (1 batch call)")
     rate_limit_write()
     ws_master.batch_update(
@@ -399,6 +367,13 @@ def main():
     if not all(c in df_links.columns for c in REQUIRED_COLS):
         raise ValueError(f"Productivity File is missing required columns: {REQUIRED_COLS}")
 
+    # Skip row 2 of the "Productivity File" sheet (the first data row, since
+    # row 1 is the header). df_links index 0 corresponds to spreadsheet row 2.
+    if len(df_links) > 0:
+        skipped_link = df_links.iloc[0].get("Link", "")
+        logger.info(f"⏭️  Skipping row 2 of link sheet (Link: {skipped_link})")
+        df_links = df_links.iloc[1:]
+
     sheet_tasks: list = []
     for _, row in df_links.iterrows():
         url = row["Link"]
@@ -410,7 +385,7 @@ def main():
 
     logger.info(f"📋 Total sheets to fetch: {len(sheet_tasks)}")
 
-    # --- Fetch all sheets (built-in retry rounds, full per-sheet logging) ---
+    # --- Fetch all sheets (raw data, only date-from filter applied) ---
     all_data, permanently_failed = fetch_all_sheets(
         client, sheet_tasks, SCHEMA, max_workers=4, max_rounds=5
     )
@@ -420,8 +395,8 @@ def main():
             f"⚠️  {len(permanently_failed)} sheet(s) excluded from master — see errors above."
         )
 
-    # --- Clean ---
-    all_data = normalize_dates(all_data, DATE_COLS)
+    # --- Light clean: dates, phone (9 digits), CCCD/id_code format ---
+    all_data = normalize_dates_phone_id(all_data, DATE_COLS)
     all_data.replace([float("inf"), float("-inf")], "", inplace=True)
     all_data.fillna("", inplace=True)
 

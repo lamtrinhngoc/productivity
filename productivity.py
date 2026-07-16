@@ -1,18 +1,24 @@
-import os
-import time
 import logging
+import os
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 
 import gspread
 import pandas as pd
 from google.oauth2.service_account import Credentials
 from requests.exceptions import JSONDecodeError
 from tenacity import (
-    retry, wait_exponential, wait_random, stop_after_attempt,
-    retry_if_exception, before_sleep_log
+    before_sleep_log,
+    retry,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential,
+    wait_random,
 )
+
 
 # =========================
 # CONFIG
@@ -22,40 +28,111 @@ logger = logging.getLogger(__name__)
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 
-LINK_SPREADSHEET_URL   = "https://docs.google.com/spreadsheets/d/10eMZVnmtyyr5JAzDvpE5Brgh-8fw3lEKmGvL5m6eCUY"
+LINK_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/10eMZVnmtyyr5JAzDvpE5Brgh-8fw3lEKmGvL5m6eCUY"
 MASTER_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1O2DOwLEKZvVthDOJBWQIuA5Vh0we9mOyqruuFBMpDSk"
 
 REQUIRED_COLS = ["Link", "Sheet 1", "Sheet 2", "Sheet 3", "Sheet 4", "Sheet 5"]
 
 SCHEMA = [
-    "date_update", "date_cdd_applied", "fullname", "source", "dob", "phone", "area",
-    "address", "registration_area", "previous_work", "id_code", "note", "email", "rehire",
-    "current_salary", "expected_ob_date", "position", "station_name", "storage",
-    "reason_for_storage", "notes_for_recruitment", "recruiter_call", "recruiter_call_date",
-    "recruiter_call_feedback", "recruiter_call_result", "hm_interview_date", "hm_interview",
-    "hm_interview_feedback", "hm_interview_result", "offering", "offering_date", "accept",
-    "accept_date", "onboard_date", "onboard", "reason_reject_ob", "finish_process",
-    "fullname_ob", "phone_ob", "id_code_ob", "pic", "ticket_id", "rider_id"
+    "date_update",
+    "date_cdd_applied",
+    "fullname",
+    "source",
+    "phone",
+    "dob",
+    "gender",
+    "area",
+    "address",
+    "registration_area",
+    "previous_work",
+    "id_code",
+    "note",
+    "email",
+    "rehire",
+    "current_salary",
+    "expected_ob_date",
+    "position",
+    "station_name",
+    "storage",
+    "reason_for_storage",
+    "notes_for_recruitment",
+    "recruiter_call",
+    "recruiter_call_date",
+    "recruiter_call_feedback",
+    "recruiter_call_result",
+    "hm_interview_date",
+    "hm_interview",
+    "hm_interview_feedback",
+    "hm_interview_result",
+    "offering",
+    "offering_date",
+    "accept",
+    "accept_date",
+    "onboard_date",
+    "onboard",
+    "reason_reject_ob",
+    "finish_process",
+    "fullname_ob",
+    "phone_ob",
+    "id_code_ob",
+    "pic",
+    "ticket_id",
+    "rider_id",
 ]
 
 DATE_COLS = [
-    "date_update", "date_cdd_applied", "recruiter_call_date",
-    "hm_interview_date", "offering_date", "accept_date", "onboard_date"
+    "date_update",
+    "date_cdd_applied",
+    "recruiter_call_date",
+    "hm_interview_date",
+    "offering_date",
+    "accept_date",
+    "onboard_date",
 ]
 
-# Configurable via env var
-FILTER_DATE_FROM = pd.Timestamp(os.getenv("FILTER_DATE_FROM", "2025-07-01"))
+GLOBAL_CUTOFF_DATE = "2025-07-01"
+FILTER_DATE_FROM = pd.Timestamp(GLOBAL_CUTOFF_DATE)
+
+VOLATILE_SOURCE_ROW = int(os.getenv("VOLATILE_SOURCE_ROW", "2"))
+VOLATILE_STABLE_WAIT_SECONDS = int(os.getenv("VOLATILE_STABLE_WAIT_SECONDS", "15"))
+VOLATILE_MAX_ROUNDS = int(os.getenv("VOLATILE_MAX_ROUNDS", "5"))
+
+SOURCE_MAX_ROUNDS = int(os.getenv("SOURCE_MAX_ROUNDS", "3"))
+SOURCE_RETRY_WAIT_SECONDS = int(os.getenv("SOURCE_RETRY_WAIT_SECONDS", "10"))
+
+MAX_WORKERS = int(os.getenv("MAX_WORKERS", "8"))
+DRY_RUN = os.getenv("DRY_RUN", "false").lower() == "true"
+FORMULA_COLS = 2
+
 
 # =========================
 # TOKEN BUCKET RATE LIMITER
 # =========================
-READ_RATE_LIMIT  = int(os.getenv("GSHEETS_READ_RPM",  "40"))
-WRITE_RATE_LIMIT = int(os.getenv("GSHEETS_WRITE_RPM", "40"))
+READ_RATE_LIMIT = int(os.getenv("GSHEETS_READ_RPM", "55"))
+WRITE_RATE_LIMIT = int(os.getenv("GSHEETS_WRITE_RPM", "45"))
 WINDOW = 60.0
 
-_read_tokens  = deque()
+_read_tokens = deque()
 _write_tokens = deque()
-_rate_lock    = threading.Lock()
+_rate_lock = threading.Lock()
+
+
+@dataclass
+class SourceTask:
+    source_id: str
+    row_number: int
+    url: str
+    sheet_names: list
+    is_volatile: bool
+
+
+@dataclass
+class FetchResult:
+    source_id: str
+    success: bool
+    rows: list
+    row_count: int
+    error: str
 
 
 def _acquire_token(tokens: deque, limit: int):
@@ -83,9 +160,9 @@ def rate_limit_write():
 # RETRY HELPERS
 # =========================
 def is_retryable_api_error(exc):
-    """Retry on 429 (quota) and transient 5xx errors."""
     if isinstance(exc, gspread.exceptions.APIError):
-        return exc.response.status_code in (429, 500, 502, 503)
+        status = getattr(exc.response, "status_code", None)
+        return status in (429, 500, 502, 503, 504)
     if isinstance(exc, JSONDecodeError):
         return True
     return False
@@ -93,7 +170,7 @@ def is_retryable_api_error(exc):
 
 RETRY_POLICY = dict(
     retry=retry_if_exception(is_retryable_api_error),
-    wait=wait_exponential(multiplier=1, min=3, max=60) + wait_random(0, 2),
+    wait=wait_exponential(multiplier=1, min=2, max=60) + wait_random(0, 2),
     stop=stop_after_attempt(5),
     before_sleep=before_sleep_log(logger, logging.WARNING),
     reraise=True,
@@ -109,12 +186,10 @@ def authenticate_gspread():
 
 
 class GSpreadClientWithCache:
-    """Thread-safe gspread client with spreadsheet/worksheet caching."""
-
     def __init__(self, client):
         self.client = client
-        self._ss_cache: dict = {}
-        self._ws_cache: dict = {}
+        self._ss_cache = {}
+        self._ws_cache = {}
         self._lock = threading.Lock()
 
     @retry(**RETRY_POLICY)
@@ -151,8 +226,15 @@ class GSpreadClientWithCache:
 def try_parsing_date(text):
     if pd.isna(text) or not str(text).strip():
         return pd.NaT
-    for fmt in ('%y/%m/%d', '%Y/%m/%d', '%m/%d/%Y', '%m/%d/%y',
-                '%d-%b-%y', '%d-%b-%Y', '%Y-%m-%d'):
+    for fmt in (
+        "%y/%m/%d",
+        "%Y/%m/%d",
+        "%m/%d/%Y",
+        "%m/%d/%y",
+        "%d-%b-%y",
+        "%d-%b-%Y",
+        "%Y-%m-%d",
+    ):
         try:
             return pd.to_datetime(text, format=fmt, errors="raise")
         except ValueError:
@@ -163,276 +245,429 @@ def try_parsing_date(text):
         return pd.NaT
 
 
+def col_index_to_a1(col_index: int) -> str:
+    if col_index <= 0:
+        raise ValueError("Column index must be >= 1")
+    chars = []
+    while col_index > 0:
+        col_index, rem = divmod(col_index - 1, 26)
+        chars.append(chr(65 + rem))
+    return "".join(reversed(chars))
+
+
 # =========================
-# READ SHEETS (raw fetch, only date filter kept)
+# SOURCE CONFIG
+# =========================
+def build_source_tasks(ws_links) -> list:
+    rate_limit_read()
+    data_links = ws_links.get_all_records()
+    df_links = pd.DataFrame(data_links)
+
+    if not all(col in df_links.columns for col in REQUIRED_COLS):
+        raise ValueError(f"Productivity File is missing required columns: {REQUIRED_COLS}")
+
+    tasks = []
+    for idx, row in df_links.iterrows():
+        row_number = idx + 2
+        url = row.get("Link", "")
+        if not url or not isinstance(url, str) or not url.strip():
+            continue
+
+        selected_names = [
+            row[col].strip()
+            for col in REQUIRED_COLS[1:]
+            if row.get(col) and isinstance(row[col], str) and row[col].strip()
+        ]
+        if not selected_names:
+            continue
+
+        tasks.append(
+            SourceTask(
+                source_id=f"row_{row_number}",
+                row_number=row_number,
+                url=url.strip(),
+                sheet_names=selected_names,
+                is_volatile=(row_number == VOLATILE_SOURCE_ROW),
+            )
+        )
+    return tasks
+
+
+# =========================
+# EXTRACT
 # =========================
 @retry(**RETRY_POLICY)
-def read_worksheet_with_retry(ws, schema):
+def count_source_rows(client: GSpreadClientWithCache, task: SourceTask):
+    spreadsheet = client.open_by_url(task.url)
+
     rate_limit_read()
-    data = ws.get("B8:AR")
-    if not data:
-        return []
-    df = pd.DataFrame(data)
-    df.columns = schema[:len(df.columns)]
-    df = df.reindex(columns=schema).fillna("")
-    df["date_update"] = df["date_update"].apply(try_parsing_date)
-    df = df[df["date_update"] >= FILTER_DATE_FROM]
-    return df.to_dict("records")
+    available_sheet_names = {ws.title for ws in spreadsheet.worksheets()}
+    selected_names = [name for name in task.sheet_names if name in available_sheet_names]
+    missing_names = [name for name in task.sheet_names if name not in available_sheet_names]
+
+    for missing in missing_names:
+        logger.warning("[VOLATILE %s] Missing worksheet '%s' while counting", task.source_id, missing)
+
+    if not selected_names:
+        return 0, {}
+
+    ranges = ["'{}'!B8:AR".format(name.replace("'", "''")) for name in selected_names]
+    rate_limit_read()
+    response = spreadsheet.values_batch_get(ranges)
+    value_ranges = response.get("valueRanges", [])
+
+    total_rows = 0
+    per_sheet_counts = {}
+    for idx, sheet_name in enumerate(selected_names):
+        block = value_ranges[idx] if idx < len(value_ranges) else {}
+        values = block.get("values", [])
+        count = sum(1 for row in values if any(str(cell).strip() for cell in row))
+        per_sheet_counts[sheet_name] = count
+        total_rows += count
+        logger.info("[VOLATILE %s] Count sheet '%s' = %s", task.source_id, sheet_name, count)
+
+    logger.info("[VOLATILE %s] Total counted rows = %s", task.source_id, total_rows)
+    return total_rows, per_sheet_counts
 
 
-def get_sheet_data(client: GSpreadClientWithCache, url: str, sheet_name: str, schema: list):
-    """Fetch rows from one worksheet. Raises on failure — caller handles errors."""
-    sheet = client.open_by_url(url)
-    ws    = client.worksheet(sheet, sheet_name)
-    return read_worksheet_with_retry(ws, schema)
+@retry(**RETRY_POLICY)
+def fetch_source_records(client: GSpreadClientWithCache, task: SourceTask) -> FetchResult:
+    spreadsheet = client.open_by_url(task.url)
+    cutoff = FILTER_DATE_FROM
 
+    rate_limit_read()
+    available_sheet_names = {ws.title for ws in spreadsheet.worksheets()}
 
-# =========================
-# FETCH WITH RETRY ROUNDS
-# =========================
-def fetch_all_sheets(
-    client: GSpreadClientWithCache,
-    sheet_tasks: list,
-    schema: list,
-    max_workers: int = 4,
-    max_rounds: int = 5,
-) -> tuple:
-    """Fetch all sheets in parallel with up to max_rounds retry rounds."""
-    all_rows: list = []
-    pending   = list(sheet_tasks)
+    selected_names = [name for name in task.sheet_names if name in available_sheet_names]
+    missing_names = [name for name in task.sheet_names if name not in available_sheet_names]
+    for missing in missing_names:
+        logger.warning("Source %s: missing worksheet '%s', skipped.", task.source_id, missing)
 
-    for round_no in range(1, max_rounds + 1):
-        if not pending:
-            break
+    if not selected_names:
+        return FetchResult(task.source_id, True, [], 0, "")
 
-        logger.info(f"🔄 Round {round_no}/{max_rounds} — {len(pending)} sheet(s) to fetch")
-        failed: list = []
-
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_task = {
-                executor.submit(get_sheet_data, client, url, name, schema): (url, name)
-                for url, name in pending
-            }
-
-            for future in as_completed(future_to_task):
-                url, name = future_to_task[future]
-                try:
-                    rows = future.result()
-                    all_rows.extend(rows)
-                    logger.info(f"  ✅ OK  — sheet '{name}' from {url}  ({len(rows)} rows)")
-                except gspread.exceptions.WorksheetNotFound:
-                    logger.error(f"  ❌ SKIP — sheet '{name}' not found in {url} (will not retry)")
-                except Exception as exc:
-                    logger.error(f"  ❌ FAIL — sheet '{name}' from {url}: {exc}")
-                    failed.append((url, name))
-
-        if failed and round_no < max_rounds:
-            wait_sec = 5 * round_no
-            logger.warning(
-                f"  ⚠️  {len(failed)} sheet(s) failed — waiting {wait_sec}s before retry..."
-            )
-            time.sleep(wait_sec)
-
-        pending = failed
-
-    if pending:
-        logger.error(f"❌ {len(pending)} sheet(s) permanently failed after {max_rounds} rounds:")
-        for url, name in pending:
-            logger.error(f"   - '{name}' :: {url}")
-    else:
-        logger.info("✅ All sheets fetched successfully.")
-
-    df_all = (
-        pd.DataFrame.from_records(all_rows, columns=schema)
-        if all_rows
-        else pd.DataFrame(columns=schema)
+    logger.info(
+        "[SOURCE %s] Start fetch with cutoff=%s. Sheets=%s",
+        task.source_id,
+        cutoff.strftime("%Y-%m-%d"),
+        ", ".join(selected_names),
     )
-    return df_all, pending
+
+    ranges = ["'{}'!B8:AR".format(name.replace("'", "''")) for name in selected_names]
+    rate_limit_read()
+    response = spreadsheet.values_batch_get(ranges)
+    value_ranges = response.get("valueRanges", [])
+
+    all_rows = []
+    for idx, sheet_name in enumerate(selected_names):
+        block = value_ranges[idx] if idx < len(value_ranges) else {}
+        values = block.get("values", [])
+        raw_rows = len(values)
+        if not values:
+            logger.info("[SOURCE %s] Sheet '%s': raw_rows=0, after_cutoff=0", task.source_id, sheet_name)
+            continue
+
+        df = pd.DataFrame(values)
+        if df.empty:
+            logger.info("[SOURCE %s] Sheet '%s': raw_rows=%s, after_cutoff=0", task.source_id, sheet_name, raw_rows)
+            continue
+
+        df.columns = SCHEMA[: len(df.columns)]
+        df = df.reindex(columns=SCHEMA).fillna("")
+        df["date_update"] = df["date_update"].apply(try_parsing_date)
+        df = df[df["date_update"] >= cutoff]
+        after_cutoff_rows = len(df)
+        logger.info(
+            "[SOURCE %s] Sheet '%s': raw_rows=%s, after_cutoff=%s",
+            task.source_id,
+            sheet_name,
+            raw_rows,
+            after_cutoff_rows,
+        )
+        if df.empty:
+            continue
+
+        df["__source_id"] = task.source_id
+        all_rows.extend(df.to_dict("records"))
+
+    return FetchResult(task.source_id, True, all_rows, len(all_rows), "")
+
+
+def fetch_regular_source_with_rounds(client: GSpreadClientWithCache, task: SourceTask) -> FetchResult:
+    for round_no in range(1, SOURCE_MAX_ROUNDS + 1):
+        logger.info("[SOURCE %s] Round %s/%s start", task.source_id, round_no, SOURCE_MAX_ROUNDS)
+        try:
+            result = fetch_source_records(client, task)
+            logger.info("[SOURCE %s] Round %s/%s success. rows=%s", task.source_id, round_no, SOURCE_MAX_ROUNDS, result.row_count)
+            return result
+        except Exception as exc:
+            logger.error("[SOURCE %s] Round %s/%s failed: %s", task.source_id, round_no, SOURCE_MAX_ROUNDS, exc)
+            if round_no < SOURCE_MAX_ROUNDS:
+                logger.info("[SOURCE %s] Retry after %ss", task.source_id, SOURCE_RETRY_WAIT_SECONDS)
+                time.sleep(SOURCE_RETRY_WAIT_SECONDS)
+
+    return FetchResult(
+        source_id=task.source_id,
+        success=False,
+        rows=[],
+        row_count=0,
+        error=f"Failed after {SOURCE_MAX_ROUNDS} rounds",
+    )
+
+
+def fetch_volatile_source_when_stable(client: GSpreadClientWithCache, task: SourceTask) -> FetchResult:
+    for round_no in range(1, VOLATILE_MAX_ROUNDS + 1):
+        logger.info("[VOLATILE %s] Stability round %s/%s start", task.source_id, round_no, VOLATILE_MAX_ROUNDS)
+
+        try:
+            count_1, per_sheet_1 = count_source_rows(client, task)
+        except Exception as exc:
+            logger.error("[VOLATILE %s] Round %s count #1 failed: %s", task.source_id, round_no, exc)
+            continue
+
+        logger.info("[VOLATILE %s] Waiting %ss before count #2", task.source_id, VOLATILE_STABLE_WAIT_SECONDS)
+        time.sleep(VOLATILE_STABLE_WAIT_SECONDS)
+
+        try:
+            count_2, per_sheet_2 = count_source_rows(client, task)
+        except Exception as exc:
+            logger.error("[VOLATILE %s] Round %s count #2 failed: %s", task.source_id, round_no, exc)
+            continue
+
+        all_sheet_names = sorted(set(per_sheet_1) | set(per_sheet_2))
+        changed_sheets = [name for name in all_sheet_names if per_sheet_1.get(name, 0) != per_sheet_2.get(name, 0)]
+        is_stable = count_1 == count_2 and not changed_sheets
+
+        logger.info(
+            "[VOLATILE %s] Round %s counts: first=%s second=%s stable=%s",
+            task.source_id, round_no, count_1, count_2, is_stable,
+        )
+
+        if changed_sheets:
+            logger.warning("[VOLATILE %s] Round %s changed sheets -> %s", task.source_id, round_no, ", ".join(changed_sheets))
+
+        if is_stable and count_2 > 0:
+            logger.info("[VOLATILE %s] Round %s stable with rows=%s. Start processing.", task.source_id, round_no, count_2)
+            try:
+                result = fetch_source_records(client, task)
+                logger.info("[VOLATILE %s] Round %s process success. rows=%s", task.source_id, round_no, result.row_count)
+                return result
+            except Exception as exc:
+                logger.error("[VOLATILE %s] Round %s process failed: %s", task.source_id, round_no, exc)
+        elif count_2 == 0:
+            logger.warning("[VOLATILE %s] Round %s stable but 0 rows. Retry.", task.source_id, round_no)
+
+        if round_no < VOLATILE_MAX_ROUNDS:
+            logger.info("[VOLATILE %s] Move to next stability round", task.source_id)
+
+    return FetchResult(
+        source_id=task.source_id,
+        success=False,
+        rows=[],
+        row_count=0,
+        error=f"Volatile source not stable after {VOLATILE_MAX_ROUNDS} rounds",
+    )
+
+
+def run_parallel_fetch(client: GSpreadClientWithCache, tasks: list) -> dict:
+    results = {}
+    total_sources = len(tasks)
+    completed_sources = 0
+    logger.info("[EXTRACT] Start parallel fetch: sources=%s max_workers=%s", total_sources, max(1, MAX_WORKERS))
+
+    with ThreadPoolExecutor(max_workers=max(1, MAX_WORKERS)) as executor:
+        future_to_task = {}
+        for task in tasks:
+            logger.info(
+                "[QUEUE] source=%s row=%s volatile=%s sheets=%s",
+                task.source_id, task.row_number, task.is_volatile, ", ".join(task.sheet_names),
+            )
+            worker = fetch_volatile_source_when_stable if task.is_volatile else fetch_regular_source_with_rounds
+            future_to_task[executor.submit(worker, client, task)] = task
+
+        for future in as_completed(future_to_task):
+            task = future_to_task[future]
+            result = future.result()
+            results[task.source_id] = result
+            completed_sources += 1
+            if result.success:
+                logger.info("[DONE] %s success rows=%s progress=%s/%s", task.source_id, result.row_count, completed_sources, total_sources)
+            else:
+                logger.error("[DONE] %s failed: %s progress=%s/%s", task.source_id, result.error, completed_sources, total_sources)
+
+    return results
 
 
 # =========================
-# LIGHT CLEAN — only date format, phone (9 digits), CCCD/id_code format
+# TRANSFORM
 # =========================
-def normalize_dates_phone_id(df: pd.DataFrame, date_cols: list) -> pd.DataFrame:
-    # --- Dates: parse then format as YYYY-MM-DD ---
+def normalize_dates(df: pd.DataFrame, date_cols: list) -> pd.DataFrame:
     for col in date_cols:
         df[col] = df[col].apply(try_parsing_date).dt.strftime("%Y-%m-%d")
         df[col] = df[col].fillna("")
 
-    # --- Phone: strip non-digits, keep last 9 digits ---
+    # action = ["recruiter_call", "hm_interview", "offering", "accept", "onboard"]
+    # for c in action:
+    #     df[c] = pd.to_numeric(df[c], errors="coerce")
+    # df["ticket_id"] = pd.to_numeric(df.get("ticket_id", 0), errors="coerce").fillna(0)
+    # df.loc[df["ticket_id"] < 20, "ticket_id"] = df.loc[df["ticket_id"] < 20, action].sum(axis=1)
+
     if "phone" in df.columns:
         df["phone"] = df["phone"].astype(str).str.replace(r"\D", "", regex=True)
         df["phone"] = df["phone"].str[-9:]
         df["phone"] = df["phone"].replace(["nan", "NaN", "None"], "").fillna("")
 
-    # --- CCCD / id_code: strip non-digits. Valid VN ID is 9 digits (old CMND)
-    #     or 12 digits (new CCCD) — keep the cleaned digits either way, but
-    #     only in the correct numeric-only format.
-    if "id_code" in df.columns:
-        df["id_code"] = df["id_code"].astype(str).str.replace(r"\D", "", regex=True)
-        df["id_code"] = df["id_code"].replace(["nan", "NaN", "None"], "").fillna("")
-        invalid_mask = ~df["id_code"].isin([""]) & ~df["id_code"].str.len().isin([9, 12])
-        if invalid_mask.any():
-            logger.warning(
-                f"  ⚠️  {invalid_mask.sum()} row(s) have id_code with invalid length "
-                f"(not 9 or 12 digits) — kept as-is, please review."
-            )
+    required_cols = {"phone", "pic", "position", "ticket_id"}
+    # if required_cols.issubset(df.columns):
+    #     if "id_code" not in df.columns:
+    #         df["id_code"] = ""
+    #     df["id_code"] = df["id_code"].fillna("").astype(str).str.strip()
+
+    #     selected_idx = []
+    #     for _, group in df.groupby(["phone", "pic", "position"], sort=False):
+    #         group_with_id = group[group["id_code"].str.len() > 0]
+    #         keep_idx = (
+    #             group_with_id["ticket_id"].idxmax()
+    #             if not group_with_id.empty
+    #             else group["ticket_id"].idxmax()
+    #         )
+    #         selected_idx.append(keep_idx)
+
+    #     df = df.loc[selected_idx].reset_index(drop=True)
 
     return df
 
 
 # =========================
-# WRITE MASTER (optimized)
+# WRITE MASTER
 # =========================
 @retry(**RETRY_POLICY)
-def ensure_grid_size(ws_master, needed_rows: int, needed_cols: int = 45):
-    """Grow the worksheet grid if the data (or the AR/AS formula columns)
-    would exceed the sheet's current row/column limits. gspread raises
-    'Range exceeds grid limits' otherwise (e.g. writing to A36532 on a
-    sheet that only has 36531 rows)."""
-    current_rows = ws_master.row_count
-    current_cols = ws_master.col_count
-    target_rows  = max(needed_rows, current_rows)
-    target_cols  = max(needed_cols, current_cols)
-
-    if target_rows > current_rows or target_cols > current_cols:
-        logger.info(
-            f"  📐 Resizing master grid: {current_rows}x{current_cols} → {target_rows}x{target_cols}"
-        )
-        rate_limit_write()
-        ws_master.resize(rows=target_rows, cols=target_cols)
-
-
-@retry(**RETRY_POLICY)
 def write_master(ws_master, values: list):
-    logger.info(f"🚀 Writing {len(values) - 1} rows to master sheet")
+    data_rows = max(len(values) - 1, 0)
+    data_cols = len(values[0]) if values else len(SCHEMA)
+    required_rows = max(len(values), 2)
+    required_cols = data_cols + FORMULA_COLS
 
-    # 0. Make sure the grid is big enough for the data + the AR/AS formula
-    #    columns (45 = column AS) before writing anything.
-    #    Small buffer of extra rows so future runs with slightly more data
-    #    don't immediately hit the limit again.
-    ensure_grid_size(ws_master, needed_rows=len(values) + 100, needed_cols=45)
+    logger.info("[LOAD] Write %s rows, %s columns to master", data_rows, data_cols)
+    logger.info(
+        "[LOAD] Current grid rows=%s cols=%s | required rows=%s cols=%s",
+        ws_master.row_count, ws_master.col_count, required_rows, required_cols,
+    )
 
-    # 1. Clear data range only
+    if ws_master.row_count < required_rows:
+        logger.info("[LOAD] Expand rows only: %s -> %s", ws_master.row_count, required_rows)
+        rate_limit_write()
+        ws_master.resize(rows=required_rows)
+
+    if ws_master.col_count < required_cols:
+        raise ValueError(
+            f"Worksheet has {ws_master.col_count} columns but requires at least {required_cols}. "
+            "Please add columns manually as requested."
+        )
+
+    data_end_col = col_index_to_a1(data_cols)
+    formula_start_col = col_index_to_a1(data_cols + 1)
+    formula_end_col = col_index_to_a1(data_cols + FORMULA_COLS)
+
+    logger.info("[LOAD] Clear ranges A:%s and %s:%s", data_end_col, formula_start_col, formula_end_col)
     rate_limit_write()
-    ws_master.batch_clear(["A:AQ"])
+    ws_master.batch_clear([f"A:{data_end_col}", f"{formula_start_col}:{formula_end_col}"])
 
-    # 2. Write data in byte-aware blocks
-    BLOCK_BYTES_LIMIT = 8 * 1024 * 1024    # 8 MB — safely under Google's 10 MB limit
-    row_pointer   = 1
-    current_block: list = []
-    current_size  = 0
+    block_bytes_limit = 8 * 1024 * 1024
+    row_pointer = 1
+    current_block = []
+    current_size = 0
 
     for row in values:
-        row_str = [("" if (c is None or c != c) else c) for c in row]
-        row_bytes = sum(len(str(s).encode("utf-8")) for s in row_str)
-
-        if current_block and current_size + row_bytes > BLOCK_BYTES_LIMIT:
+        row_str = [("" if (cell is None or cell != cell) else cell) for cell in row]
+        row_bytes = sum(len(str(cell).encode("utf-8")) for cell in row_str)
+        if current_block and current_size + row_bytes > block_bytes_limit:
             end_row = row_pointer + len(current_block) - 1
-            logger.info(
-                f"  📦 Writing rows {row_pointer}–{end_row} "
-                f"({len(current_block)} rows, {current_size / 1024:.1f} KB)"
-            )
+            logger.info("[LOAD] Update block A%s:%s%s (%s rows)", row_pointer, data_end_col, end_row, len(current_block))
             rate_limit_write()
-            ws_master.update(f"A{row_pointer}", current_block, value_input_option="RAW")
-            row_pointer  += len(current_block)
+            ws_master.update(f"A{row_pointer}", current_block, value_input_option="USER_ENTERED")
+            row_pointer += len(current_block)
             current_block = []
-            current_size  = 0
+            current_size = 0
 
         current_block.append(row_str)
         current_size += row_bytes
 
     if current_block:
         end_row = row_pointer + len(current_block) - 1
-        logger.info(
-            f"  📦 Writing rows {row_pointer}–{end_row} "
-            f"({len(current_block)} rows, {current_size / 1024:.1f} KB) [final]"
-        )
+        logger.info("[LOAD] Update final block A%s:%s%s (%s rows)", row_pointer, data_end_col, end_row, len(current_block))
         rate_limit_write()
         ws_master.update(f"A{row_pointer}", current_block, value_input_option="USER_ENTERED")
 
-    # 3. Formulas — 1 batch_update call
-    logger.info("  ⚡ Writing formula columns (1 batch call)")
     rate_limit_write()
     ws_master.batch_update(
         [
-            {
-                "range": "AR1:AS1",
-                "values": [["channel_by_prod", "team"]],
-            },
-            {
-                "range": "AR2",
-                "values": [["=ARRAYFORMULA(IFNA(XLOOKUP(D2:D,Source!$A:$A,Source!$C:$C)))"]],
-            },
-            {
-                "range": "AS2",
-                "values": [["=ARRAYFORMULA(IFNA(XLOOKUP(AO2:AO,Info!$C:$C,Info!$N:$N)))"]],
-            },
+            {"range": f"{formula_start_col}1:{formula_end_col}1", "values": [["channel_by_prod", "team"]]},
+            {"range": f"{formula_start_col}2", "values": [["=ARRAYFORMULA(IFNA(XLOOKUP(D2:D,Source!$A:$A,Source!$C:$C)))"]]},
+            {"range": f"{formula_end_col}2", "values": [["=ARRAYFORMULA(IFNA(XLOOKUP(AP2:AP,Info!$C:$C,Info!$N:$N)))"]]},
         ],
         value_input_option="USER_ENTERED",
     )
-
-    logger.info("✅ Master sheet write complete.")
+    logger.info("[LOAD] Master write complete")
 
 
 # =========================
 # MAIN
 # =========================
 def main():
+    logger.info("=== START new_productivity ingestion ===")
+    logger.info("[CONFIG] GLOBAL_CUTOFF_DATE=%s", GLOBAL_CUTOFF_DATE)
+    logger.info("[CONFIG] VOLATILE_SOURCE_ROW=%s", VOLATILE_SOURCE_ROW)
+    logger.info("[CONFIG] VOLATILE_STABLE_WAIT_SECONDS=%s", VOLATILE_STABLE_WAIT_SECONDS)
+    logger.info("[CONFIG] VOLATILE_MAX_ROUNDS=%s", VOLATILE_MAX_ROUNDS)
+    logger.info("[CONFIG] SOURCE_MAX_ROUNDS=%s", SOURCE_MAX_ROUNDS)
+
     client = GSpreadClientWithCache(authenticate_gspread())
 
-    # --- Load sheet task list ---
+    logger.info("[STEP 1/3] Load source configuration")
     link_spreadsheet = client.open_by_url(LINK_SPREADSHEET_URL)
     ws_links = client.worksheet(link_spreadsheet, "Productivity File")
+    source_tasks = build_source_tasks(ws_links)
+    logger.info("[STEP 1/3] Configured sources: %s", len(source_tasks))
 
-    rate_limit_read()
-    data_links = ws_links.get_all_records()
-    df_links   = pd.DataFrame(data_links)
-
-    if not all(c in df_links.columns for c in REQUIRED_COLS):
-        raise ValueError(f"Productivity File is missing required columns: {REQUIRED_COLS}")
-
-    # Skip row 2 of the "Productivity File" sheet (the first data row, since
-    # row 1 is the header). df_links index 0 corresponds to spreadsheet row 2.
-    if len(df_links) > 0:
-        skipped_link = df_links.iloc[0].get("Link", "")
-        logger.info(f"⏭️  Skipping row 2 of link sheet (Link: {skipped_link})")
-        df_links = df_links.iloc[1:]
-
-    sheet_tasks: list = []
-    for _, row in df_links.iterrows():
-        url = row["Link"]
-        if url and isinstance(url, str) and url.strip():
-            for col in REQUIRED_COLS[1:]:
-                name = row[col]
-                if name:
-                    sheet_tasks.append((url, name))
-
-    logger.info(f"📋 Total sheets to fetch: {len(sheet_tasks)}")
-
-    # --- Fetch all sheets (raw data, only date-from filter applied) ---
-    all_data, permanently_failed = fetch_all_sheets(
-        client, sheet_tasks, SCHEMA, max_workers=4, max_rounds=5
-    )
-
-    if permanently_failed:
-        logger.warning(
-            f"⚠️  {len(permanently_failed)} sheet(s) excluded from master — see errors above."
-        )
-
-    # --- Light clean: dates, phone (9 digits), CCCD/id_code format ---
-    all_data = normalize_dates_phone_id(all_data, DATE_COLS)
-    all_data.replace([float("inf"), float("-inf")], "", inplace=True)
-    all_data.fillna("", inplace=True)
-
-    # --- Write ---
+    logger.info("[STEP 2/3] Fetch sources in parallel")
     master_spreadsheet = client.open_by_url(MASTER_SPREADSHEET_URL)
     ws_master = client.worksheet(master_spreadsheet, "Productivity")
+    results = run_parallel_fetch(client, source_tasks)
 
-    values = [all_data.columns.tolist()] + all_data.values.tolist()
-    write_master(ws_master, values)
+    failed = [(sid, r.error) for sid, r in results.items() if not r.success]
+    incoming_rows = []
+    for source_id, result in results.items():
+        if result.success and result.rows:
+            incoming_rows.extend(result.rows)
+        logger.info("[EXTRACT] %s success=%s rows=%s", source_id, result.success, result.row_count)
 
-    logger.info("✅ DONE")
+    logger.info("[STEP 3/3] Normalize and write master")
+    incoming_df = pd.DataFrame.from_records(incoming_rows) if incoming_rows else pd.DataFrame(columns=SCHEMA)
+    for col in SCHEMA:
+        if col not in incoming_df.columns:
+            incoming_df[col] = ""
+    incoming_df = incoming_df.reindex(columns=SCHEMA).fillna("")
+
+    all_data = normalize_dates(incoming_df, DATE_COLS)
+    all_data.replace([float("inf"), float("-inf")], "", inplace=True)
+    all_data.fillna("", inplace=True)
+    all_data = all_data.reindex(columns=SCHEMA).fillna("")
+    logger.info("[CLEAN] incoming=%s output=%s", len(incoming_df), len(all_data))
+
+    if DRY_RUN:
+        logger.info("[WRITE] DRY_RUN=true -> skip write master")
+    else:
+        write_master(ws_master, [all_data.columns.tolist()] + all_data.values.tolist())
+
+    if failed:
+        logger.warning("[END] Run completed with %s failed sources", len(failed))
+        for source_id, err in failed:
+            logger.warning("[END] %s -> %s", source_id, err)
+    else:
+        logger.info("[END] Run completed with no failed sources")
+
+    logger.info("=== DONE ===")
 
 
 if __name__ == "__main__":

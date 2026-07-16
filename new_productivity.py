@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 
 LINK_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/10eMZVnmtyyr5JAzDvpE5Brgh-8fw3lEKmGvL5m6eCUY"
-MASTER_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1VlXicEr1FGrpdDcRpuv1aE2TAG-7QHEfWKNtFJF4nc8"
+MASTER_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1O2DOwLEKZvVthDOJBWQIuA5Vh0we9mOyqruuFBMpDSk"
 
 REQUIRED_COLS = ["Link", "Sheet 1", "Sheet 2", "Sheet 3", "Sheet 4", "Sheet 5"]
 
@@ -506,11 +506,11 @@ def normalize_dates(df: pd.DataFrame, date_cols: list) -> pd.DataFrame:
         df[col] = df[col].apply(try_parsing_date).dt.strftime("%Y-%m-%d")
         df[col] = df[col].fillna("")
 
-    action = ["recruiter_call", "hm_interview", "offering", "accept", "onboard"]
-    for c in action:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
-    df["ticket_id"] = pd.to_numeric(df.get("ticket_id", 0), errors="coerce").fillna(0)
-    df.loc[df["ticket_id"] < 20, "ticket_id"] = df.loc[df["ticket_id"] < 20, action].sum(axis=1)
+    # action = ["recruiter_call", "hm_interview", "offering", "accept", "onboard"]
+    # for c in action:
+    #     df[c] = pd.to_numeric(df[c], errors="coerce")
+    # df["ticket_id"] = pd.to_numeric(df.get("ticket_id", 0), errors="coerce").fillna(0)
+    # df.loc[df["ticket_id"] < 20, "ticket_id"] = df.loc[df["ticket_id"] < 20, action].sum(axis=1)
 
     if "phone" in df.columns:
         df["phone"] = df["phone"].astype(str).str.replace(r"\D", "", regex=True)
@@ -518,22 +518,22 @@ def normalize_dates(df: pd.DataFrame, date_cols: list) -> pd.DataFrame:
         df["phone"] = df["phone"].replace(["nan", "NaN", "None"], "").fillna("")
 
     required_cols = {"phone", "pic", "position", "ticket_id"}
-    if required_cols.issubset(df.columns):
-        if "id_code" not in df.columns:
-            df["id_code"] = ""
-        df["id_code"] = df["id_code"].fillna("").astype(str).str.strip()
+    # if required_cols.issubset(df.columns):
+    #     if "id_code" not in df.columns:
+    #         df["id_code"] = ""
+    #     df["id_code"] = df["id_code"].fillna("").astype(str).str.strip()
 
-        selected_idx = []
-        for _, group in df.groupby(["phone", "pic", "position"], sort=False):
-            group_with_id = group[group["id_code"].str.len() > 0]
-            keep_idx = (
-                group_with_id["ticket_id"].idxmax()
-                if not group_with_id.empty
-                else group["ticket_id"].idxmax()
-            )
-            selected_idx.append(keep_idx)
+    #     selected_idx = []
+    #     for _, group in df.groupby(["phone", "pic", "position"], sort=False):
+    #         group_with_id = group[group["id_code"].str.len() > 0]
+    #         keep_idx = (
+    #             group_with_id["ticket_id"].idxmax()
+    #             if not group_with_id.empty
+    #             else group["ticket_id"].idxmax()
+    #         )
+    #         selected_idx.append(keep_idx)
 
-        df = df.loc[selected_idx].reset_index(drop=True)
+    #     df = df.loc[selected_idx].reset_index(drop=True)
 
     return df
 

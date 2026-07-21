@@ -52,3 +52,7 @@ jobs:
     - name: Run nationwide script
       run: |
         python "extract-productivity.py"
+        
+    - name: Run master input
+      run: |
+        python "productivity.py"

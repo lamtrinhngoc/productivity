@@ -93,6 +93,9 @@ DATE_COLS = [
 GLOBAL_CUTOFF_DATE = "2025-07-01"
 FILTER_DATE_FROM = pd.Timestamp(GLOBAL_CUTOFF_DATE)
 
+# Chỉ lấy link bắt đầu từ dòng này của sheet cấu hình (dòng 1 là header)
+SOURCE_START_ROW = int(os.getenv("SOURCE_START_ROW", "3"))
+
 VOLATILE_SOURCE_ROW = int(os.getenv("VOLATILE_SOURCE_ROW", "2"))
 VOLATILE_STABLE_WAIT_SECONDS = int(os.getenv("VOLATILE_STABLE_WAIT_SECONDS", "15"))
 VOLATILE_MAX_ROUNDS = int(os.getenv("VOLATILE_MAX_ROUNDS", "5"))
@@ -269,6 +272,10 @@ def build_source_tasks(ws_links) -> list:
     tasks = []
     for idx, row in df_links.iterrows():
         row_number = idx + 2
+
+        if row_number < SOURCE_START_ROW:
+            continue
+
         url = row.get("Link", "")
         if not url or not isinstance(url, str) or not url.strip():
             continue
@@ -617,6 +624,7 @@ def write_master(ws_master, values: list):
 def main():
     logger.info("=== START new_productivity ingestion ===")
     logger.info("[CONFIG] GLOBAL_CUTOFF_DATE=%s", GLOBAL_CUTOFF_DATE)
+    logger.info("[CONFIG] SOURCE_START_ROW=%s", SOURCE_START_ROW)
     logger.info("[CONFIG] VOLATILE_SOURCE_ROW=%s", VOLATILE_SOURCE_ROW)
     logger.info("[CONFIG] VOLATILE_STABLE_WAIT_SECONDS=%s", VOLATILE_STABLE_WAIT_SECONDS)
     logger.info("[CONFIG] VOLATILE_MAX_ROUNDS=%s", VOLATILE_MAX_ROUNDS)

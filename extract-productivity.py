@@ -189,10 +189,13 @@ def main():
         "WH - Outbound": "Warehouse Staff",
         "WH - Inventory": "Warehouse Staff",
         "WH - Return": "Warehouse Staff",
-        "BD contractor": "BD contractor",
-        "Telesale": "BD contractor",
-        "BD Satellite Sales": "BD contractor",
-        "KAM": "BD contractor",
+        "BD contractor": "BD BPO, SME (Office)",
+        "Telesale": "NSS BPO, Telesales",
+        "BD Satellite Sales": "BD BPO, Field Sales",
+        "KAM": "NSS BPO, KAM",
+        "Seller Success":"NSS BPO, Seller Success",
+        "BD Contractor (NSS)":"BD BPO, Field Sales",
+        "BD Contractor, Field Sales (MAD)":"BD BPO, Field Sales",
         "S.BPO": "S-BPO",
     }
     df['position'] = df['position'].replace(mapping)

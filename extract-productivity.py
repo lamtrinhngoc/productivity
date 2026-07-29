@@ -162,8 +162,8 @@ def main():
 
     mapping = {
         "3. Staff": "FTE Staff",
-        "3. Staff SOC": "Staff SOC",
-        "3. Staff FLM": "Staff FLM",
+        "3. Staff SOC": "FTE Staff",
+        "3. Staff FLM": "FTE Staff",
         "3. Staff (DC)": "FTE Staff (DC)",
         "4. Rider": "Rider",
         "4. Rider - Lơ xe": "Rider Bulky (Lơ)",

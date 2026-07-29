@@ -291,7 +291,7 @@ def main():
         "Raw Productivity",
         df[
             df['station_name'].isin(["Binh Duong 1 SOC", "BD A Mega SOC", "BD B Mega SOC"])
-            & df['position'].str.contains("FTE Staff", na=False)
+            & df['position'].str.contains("FTE Staff|Staff SOC", na=False)
         ],
         use_batch_clear=True,
         clear_range="A:AT"

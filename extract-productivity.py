@@ -292,7 +292,8 @@ def main():
         'https://docs.google.com/spreadsheets/d/1-uKjt-NamVr3eOwAycYicJnFkTF5SkzQeI0PX7O_r9k',
         "Raw Productivity",
         df[
-            df['station_name'].isin(["Binh Duong 1 SOC", "BD A Mega SOC", "BD B Mega SOC"])
+            df['area'].isin(["South", "Central", "HCM"])
+            & df['station_name'].str.contains("SOC", na=False)
             & df['position'].str.contains("FTE Staff|Staff SOC", na=False)
         ],
         use_batch_clear=True,

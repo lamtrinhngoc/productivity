@@ -289,7 +289,7 @@ def main():
 
     write_df_to_sheet(
         "Binh Duong SOC",
-        'https://docs.google.com/spreadsheets/d/1-uKjt-NamVr3eOwAycYicJnFkTF5SkzQeI0PX7O_r9k',
+        'https://docs.google.com/spreadsheets/d/1fzGGKZVo7q3pRWx7Bwo6aPDzmqD1FpX7fVSLmGhnkNw',
         "Raw Productivity",
         df[
             df['area'].isin(["South", "Central", "HCM"])
